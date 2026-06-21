@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dimplex System M (UHI)",
+        "description": "Connect to the UHI controller of the heat pump.",
+        "data": {
+          "name": "Display name",
+          "host": "Host / IP address",
+          "port": "Port",
+          "token": "Token (optional)",
+          "device_id": "Device ID (optional)",
+          "language": "Language of entity names"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect.",
+      "invalid_auth": "Authentication failed.",
+      "unknown": "Unknown error."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "language": "Language of entity names",
+          "state_interval": "Operation data poll interval (seconds)",
+          "version_interval": "Version poll interval (seconds)"
+        }
+      }
+    }
+  }
+}

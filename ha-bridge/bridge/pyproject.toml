@@ -1,0 +1,27 @@
+[project]
+name = "uhi-ha-bridge"
+version = "0.1.0"
+description = "Test-Bridge: UHI Waermepumpe <-> Home Assistant via MQTT Discovery (liest UHI ueber vorhandene Endpunkte/Socket, ohne UHI zu veraendern)"
+requires-python = ">=3.11"
+dependencies = [
+    # HA-Discovery / State / Commands
+    "paho-mqtt>=2.1.0",
+    # REST-Aufrufe gegen UHI
+    "requests>=2.32.0",
+    # Live-Betriebsdaten ueber Socket.IO.
+    # UHI nutzt socket.io-Server v2 -> Client muss < 5 sein (Engine.IO v3).
+    "python-socketio[client]>=4.6.1,<5",
+    "python-engineio>=3.14.2,<4",
+    "websocket-client>=1.8.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+uhi-ha-bridge = "uhi_ha_bridge.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["uhi_ha_bridge"]

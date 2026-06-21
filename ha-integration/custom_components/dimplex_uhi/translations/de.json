@@ -1,0 +1,38 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dimplex System M (UHI)",
+        "description": "Verbindung zur UHI-Steuerung der Wärmepumpe herstellen.",
+        "data": {
+          "name": "Anzeigename",
+          "host": "Host / IP-Adresse",
+          "port": "Port",
+          "token": "Token (optional)",
+          "device_id": "Geräte-ID (optional)",
+          "language": "Sprache der Entitätsnamen"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen.",
+      "invalid_auth": "Authentifizierung fehlgeschlagen.",
+      "unknown": "Unbekannter Fehler."
+    },
+    "abort": {
+      "already_configured": "Dieses Gerät ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "data": {
+          "language": "Sprache der Entitätsnamen",
+          "state_interval": "Abfrageintervall Betriebsdaten (Sekunden)",
+          "version_interval": "Abfrageintervall Version (Sekunden)"
+        }
+      }
+    }
+  }
+}

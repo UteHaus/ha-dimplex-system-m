@@ -1,0 +1,12 @@
+# Minimal-Konfiguration fuer den Test.
+# Die MQTT-Integration wird ueber das HA-UI eingerichtet
+# (Einstellungen -> Geraete & Dienste -> Integration hinzufuegen -> MQTT),
+# Broker-Host: mosquitto, Port: 1883.
+#
+# Die Waermepumpen-Entitaeten werden von der Bridge per MQTT-Discovery
+# automatisch angelegt (discovery_prefix: homeassistant).
+
+default_config:
+
+# Recorder/History sind in default_config bereits aktiv und historisieren
+# die per MQTT empfangenen Werte automatisch.

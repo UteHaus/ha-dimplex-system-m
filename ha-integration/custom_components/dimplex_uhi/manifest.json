@@ -1,0 +1,14 @@
+{
+  "domain": "dimplex_uhi",
+  "name": "Dimplex System M (UHI)",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/local/dimplex_uhi",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/local/dimplex_uhi/issues",
+  "requirements": [
+    "python-socketio[asyncio_client]<5",
+    "python-engineio<4"
+  ],
+  "version": "0.1.0"
+}
