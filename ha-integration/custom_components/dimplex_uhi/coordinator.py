@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
-from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry

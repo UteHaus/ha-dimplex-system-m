@@ -9,8 +9,8 @@ Uses only existing endpoints/socket - NO changes are made to UHI.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
+import logging
 
 import requests
 import socketio
@@ -46,15 +46,15 @@ class UhiClient:
 
     def _register_socket_handlers(self) -> None:
         @self._sio.event
-        def connect() -> None:  # noqa: WPS430
+        def connect() -> None:
             logger.info("Socket.IO connected")
 
         @self._sio.event
-        def disconnect() -> None:  # noqa: WPS430
+        def disconnect() -> None:
             logger.warning("Socket.IO disconnected")
 
         @self._sio.on("uhi.collector.operationdata.change-bundle")
-        def _on_bundle(data) -> None:  # noqa: WPS430
+        def _on_bundle(data) -> None:
             # Payload structure: { event, payload: { KEY: value, ... }, _meta }
             values = data.get("payload") if isinstance(data, dict) else None
             if not isinstance(values, dict):

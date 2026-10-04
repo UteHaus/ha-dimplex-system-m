@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from functools import cache, lru_cache
 import json
 import logging
-import re
-from functools import lru_cache
 from pathlib import Path
+import re
 
 from .const import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 
@@ -15,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).parent / "data"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _load_names(language: str) -> dict[str, str]:
     path = _DATA_DIR / f"names_{language}.json"
     try:

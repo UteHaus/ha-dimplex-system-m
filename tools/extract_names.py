@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
+import re
 
 # Soft-Hyphen (HTML-Entity und Unicode) sowie einfache HTML-Tags entfernen.
 _SHY_ENTITY = re.compile(r"&shy;?")

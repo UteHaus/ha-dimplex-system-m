@@ -1,0 +1,26 @@
+# Python linting for the whole repository (integration, bridge, tools).
+# Run from the repository root: `uvx ruff check .`
+target-version = "py311"
+line-length = 88
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import sorting
+    "B",   # bugbear
+    "BLE", # blind except (mark intended ones with noqa)
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003", # en dash and umlauts in DE/EN texts are intended
+    "SIM105", # try/except/pass is as clear as contextlib.suppress
+]
+
+[lint.isort]
+known-first-party = ["custom_components", "uhi_ha_bridge"]
+force-sort-within-sections = true
+combine-as-imports = true

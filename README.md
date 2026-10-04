@@ -121,3 +121,16 @@ Run from the repository root (requires the UHI sources next to the repo):
 ```bash
 python3 tools/extract_names.py --uhi-root ../uhi
 ```
+
+## Linting
+
+Python code (integration, bridge and tools) is checked with
+[ruff](https://docs.astral.sh/ruff/); the configuration is in `ruff.toml`.
+Run it from the repository root:
+
+```bash
+uvx ruff check .        # report
+uvx ruff check . --fix  # apply safe fixes
+```
+
+The same check runs on GitHub for every push and pull request.

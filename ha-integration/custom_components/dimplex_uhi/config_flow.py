@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-import voluptuous as vol
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -16,6 +14,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 
 from .api import UhiApiClient, UhiApiError, UhiAuthError
 from .const import (

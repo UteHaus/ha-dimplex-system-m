@@ -2,18 +2,18 @@
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-import custom_components.dimplex_uhi.api  # noqa: F401
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.restore_state import DATA_RESTORE_STATE, StoredState
 from homeassistant.util import dt as dt_util
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     mock_restore_cache_with_extra_data,
 )
 
+import custom_components.dimplex_uhi.api  # noqa: F401
 from custom_components.dimplex_uhi.api import UhiApiError
 
 DOMAIN = "dimplex_uhi"
@@ -22,14 +22,26 @@ BASE = "custom_components.dimplex_uhi.api.UhiApiClient"
 
 GROUPS = {
     "GROUP_01": [
-        {"key": "E_Aussen_T", "value": "5.5", "definition": {"physicalUnit": "UNIT_DEG_C"}},
-        {"key": "P_WW_SOLL", "value": "48", "definition": {"physicalUnit": "UNIT_DEG_C"}},
+        {
+            "key": "E_Aussen_T",
+            "value": "5.5",
+            "definition": {"physicalUnit": "UNIT_DEG_C"},
+        },
+        {
+            "key": "P_WW_SOLL",
+            "value": "48",
+            "definition": {"physicalUnit": "UNIT_DEG_C"},
+        },
         {"key": "WPIO2_r_ECT_AC_Inp_Power", "value": "1000", "definition": {}},
     ]
 }
 # UHI 3.1.4: no MAC; mode ids are strings; GET operationmode is not wrapped.
 VERSION = {"uhi": {"version": "3.1.4"}, "heatpump": "x"}
-MODES = [{"id": "0", "name": "Sommer"}, {"id": "1", "name": "Winter"}, {"id": "3", "name": "Party"}]
+MODES = [
+    {"id": "0", "name": "Sommer"},
+    {"id": "1", "name": "Winter"},
+    {"id": "3", "name": "Party"},
+]
 MODE = {"id": 1, "is_automatic_mode": 1, "name": "Winter", "dateStart": None}
 
 
@@ -45,8 +57,15 @@ def api():
         "get_serial_number": AsyncMock(return_value=SERIAL),
         "get_operation_mode_list": AsyncMock(return_value=MODES),
         "get_operation_mode": AsyncMock(return_value=dict(MODE)),
-        "set_operation_mode": AsyncMock(side_effect=lambda mode_id, auto, **kw: {"id": mode_id, "is_automatic_mode": int(auto)}),
-        "set_function_data": AsyncMock(side_effect=lambda key, value: {"key": key, "value": float(value)}),
+        "set_operation_mode": AsyncMock(
+            side_effect=lambda mode_id, auto, **kw: {
+                "id": mode_id,
+                "is_automatic_mode": int(auto),
+            }
+        ),
+        "set_function_data": AsyncMock(
+            side_effect=lambda key, value: {"key": key, "value": float(value)}
+        ),
         "get_function_data_groups": AsyncMock(return_value=GROUPS),
         "connect_socket": AsyncMock(),
         "disconnect_socket": AsyncMock(),
@@ -86,14 +105,26 @@ async def test_mode_and_automatic_initialized(hass: HomeAssistant, api) -> None:
     assert _state(hass, "P_TBaUs").state == "on"
 
 
-async def test_select_mode_keeps_automatic_and_party_end(hass: HomeAssistant, api) -> None:
+async def test_select_mode_keeps_automatic_and_party_end(
+    hass: HomeAssistant, api
+) -> None:
     await _setup(hass)
     mode = _state(hass, "BA_aktiv")
-    await hass.services.async_call("select", "select_option", {"entity_id": mode.entity_id, "option": "Sommer"}, blocking=True)
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": mode.entity_id, "option": "Sommer"},
+        blocking=True,
+    )
     api["set_operation_mode"].assert_awaited_with(0, True)
     assert hass.states.get(mode.entity_id).state == "Sommer"
 
-    await hass.services.async_call("select", "select_option", {"entity_id": mode.entity_id, "option": "Party"}, blocking=True)
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": mode.entity_id, "option": "Party"},
+        blocking=True,
+    )
     args, kwargs = api["set_operation_mode"].await_args
     assert args == (3, True) and "dateEnd" in kwargs
 
@@ -101,22 +132,40 @@ async def test_select_mode_keeps_automatic_and_party_end(hass: HomeAssistant, ap
 async def test_automatic_switch(hass: HomeAssistant, api) -> None:
     _, coord = await _setup(hass)
     sw = _state(hass, "P_TBaUs")
-    await hass.services.async_call("switch", "turn_off", {"entity_id": sw.entity_id}, blocking=True)
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": sw.entity_id}, blocking=True
+    )
     api["set_operation_mode"].assert_awaited_with(1, False)
     assert hass.states.get(sw.entity_id).state == "off"
     coord.current_mode_id = 3
     with pytest.raises(HomeAssistantError):
-        await hass.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
+        await hass.services.async_call(
+            "switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True
+        )
 
 
 async def test_restore_live_and_write(hass: HomeAssistant, api) -> None:
     ent_reg = er.async_get(hass)
-    ent_reg.async_get_or_create("number", DOMAIN, f"{SERIAL}_P_HK1_WK", suggested_object_id="wk")
-    ent_reg.async_get_or_create("select", DOMAIN, f"{SERIAL}_P_EVS", suggested_object_id="evs")
+    ent_reg.async_get_or_create(
+        "number", DOMAIN, f"{SERIAL}_P_HK1_WK", suggested_object_id="wk"
+    )
+    ent_reg.async_get_or_create(
+        "select", DOMAIN, f"{SERIAL}_P_EVS", suggested_object_id="evs"
+    )
     mock_restore_cache_with_extra_data(
         hass,
-        [(State("number.wk", "12"), {"native_value": 12.0, "native_min_value": -19,
-          "native_max_value": 38, "native_step": 1, "native_unit_of_measurement": None})],
+        [
+            (
+                State("number.wk", "12"),
+                {
+                    "native_value": 12.0,
+                    "native_min_value": -19,
+                    "native_max_value": 38,
+                    "native_step": 1,
+                    "native_unit_of_measurement": None,
+                },
+            )
+        ],
     )
     hass.data[DATA_RESTORE_STATE].last_states["select.evs"] = StoredState(
         State("select.evs", "Dauerhaft"), None, dt_util.utcnow()
@@ -130,13 +179,17 @@ async def test_restore_live_and_write(hass: HomeAssistant, api) -> None:
     assert _state(hass, "BA_aktiv").state == "Sommer"
     assert float(hass.states.get("number.wk").state) == 20
 
-    await hass.services.async_call("number", "set_value", {"entity_id": "number.wk", "value": 5}, blocking=True)
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": "number.wk", "value": 5}, blocking=True
+    )
     api["set_function_data"].assert_awaited_with("P_HK1_WK", 5)
     assert float(hass.states.get("number.wk").state) == 5
 
     api["set_function_data"].side_effect = UhiApiError("HTTP 500")
     with pytest.raises(HomeAssistantError):
-        await hass.services.async_call("number", "set_value", {"entity_id": "number.wk", "value": 7}, blocking=True)
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": "number.wk", "value": 7}, blocking=True
+        )
     assert float(hass.states.get("number.wk").state) == 5
 
     result = await hass.config_entries.options.async_init(coord.entry.entry_id)
@@ -167,7 +220,9 @@ async def test_energy_left_riemann(hass: HomeAssistant, api) -> None:
 
 
 async def test_config_flow_uses_serial_without_mac(hass: HomeAssistant, api) -> None:
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
     with patch("custom_components.dimplex_uhi.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"name": "WP", "host": "uhi", "language": "de"}

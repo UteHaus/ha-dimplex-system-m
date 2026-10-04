@@ -6,12 +6,12 @@ via a callback (set_command_handler).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 import json
 import logging
 import os
 import re
-from collections.abc import Callable
-from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
@@ -68,7 +68,9 @@ class MqttBridge:
     def set_command_handler(self, handler: Callable[[str, str], None]) -> None:
         self._command_handler = handler
 
-    def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
+    def _on_connect(
+        self, client, userdata, flags, reason_code, properties=None
+    ) -> None:
         logger.info("MQTT connected (rc=%s)", reason_code)
         self.publish_availability(True)
 
@@ -95,7 +97,10 @@ class MqttBridge:
         if not self._enabled:
             return
         self._client.publish(
-            self._availability_topic, "online" if online else "offline", qos=1, retain=True
+            self._availability_topic,
+            "online" if online else "offline",
+            qos=1,
+            retain=True,
         )
 
     def publish_state(self, entity_id: str, value) -> None:
@@ -137,7 +142,9 @@ class MqttBridge:
                 self._unknown_log_path,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Unknown log not readable (%s): %s", self._unknown_log_path, exc)
+            logger.warning(
+                "Unknown log not readable (%s): %s", self._unknown_log_path, exc
+            )
 
     def _record_unknown(self, key: str, example_value: str) -> None:
         """Write an unknown key to the log file once."""
@@ -151,7 +158,7 @@ class MqttBridge:
             with open(self._unknown_log_path, "a", encoding="utf-8") as fh:
                 if new_file:
                     fh.write("# timestamp\tkey\texample_value\n")
-                ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                ts = datetime.now(UTC).isoformat(timespec="seconds")
                 fh.write(f"{ts}\t{key}\t{example_value}\n")
         except Exception as exc:  # noqa: BLE001
             logger.warning(

@@ -210,9 +210,7 @@ def is_curated(key: str, group: str | None) -> bool:
         return True
     if key in CURATED_SENSOR_KEYS:
         return True
-    if group is not None and group in CURATED_GROUPS:
-        return True
-    return False
+    return group is not None and group in CURATED_GROUPS
 
 
 def coerce_number(payload: Any) -> Any:

@@ -9,8 +9,8 @@ Only existing endpoints/socket are used – NO change to the UHI.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable, Iterable
+import logging
 from typing import Any
 
 import aiohttp
@@ -48,7 +48,9 @@ class UhiApiClient:
             self._headers["Device"] = device_id
 
         self._sio: socketio.AsyncClient | None = None
-        self._on_operationdata: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._on_operationdata: (
+            Callable[[dict[str, Any]], Awaitable[None]] | None
+        ) = None
         self._on_connect: Callable[[], None] | None = None
 
     @property
@@ -69,7 +71,10 @@ class UhiApiClient:
         url = f"{self._base_url}{path}"
         try:
             async with self._session.get(
-                url, params=params, headers=self._headers, timeout=aiohttp.ClientTimeout(total=30)
+                url,
+                params=params,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status in (401, 403):
                     raise UhiAuthError(f"HTTP {resp.status} at {path}")
@@ -82,7 +87,10 @@ class UhiApiClient:
         url = f"{self._base_url}{path}"
         try:
             async with self._session.put(
-                url, json=payload, headers=self._headers, timeout=aiohttp.ClientTimeout(total=15)
+                url,
+                json=payload,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status in (401, 403):
                     raise UhiAuthError(f"HTTP {resp.status} at {path}")
@@ -154,17 +162,17 @@ class UhiApiClient:
         )
 
         @sio.event
-        async def connect() -> None:  # noqa: WPS430
+        async def connect() -> None:
             _LOGGER.debug("Socket.IO connected (%s)", url)
             if self._on_connect:
                 self._on_connect()
 
         @sio.event
-        async def disconnect() -> None:  # noqa: WPS430
+        async def disconnect() -> None:
             _LOGGER.warning("Socket.IO disconnected")
 
         @sio.on(OPERATIONDATA_EVENT)
-        async def _on_bundle(data: Any) -> None:  # noqa: WPS430
+        async def _on_bundle(data: Any) -> None:
             values = data.get("payload") if isinstance(data, dict) else None
             if isinstance(values, dict) and self._on_operationdata:
                 await self._on_operationdata(values)
