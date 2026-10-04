@@ -134,3 +134,16 @@ uvx ruff check . --fix  # apply safe fixes
 ```
 
 The same check runs on GitHub for every push and pull request.
+
+## Releases
+
+Releases are built by GitHub Actions when a version tag is pushed:
+
+1. Set `version` in `ha-integration/custom_components/dimplex_uhi/manifest.json`
+   (e.g. `0.2.0`) and commit it.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
+
+The workflow checks that the tag matches the manifest version, runs ruff and
+the integration tests, and publishes a GitHub release with generated notes and
+`dimplex_uhi.zip` (the integration folder, for manual installation). Tags with a
+suffix such as `v0.2.0-beta.1` are published as pre-release.
