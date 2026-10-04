@@ -1,0 +1,3 @@
+pytest-homeassistant-custom-component
+python-socketio[asyncio_client]<5
+python-engineio<4

@@ -49,10 +49,20 @@ class UhiApiClient:
 
         self._sio: socketio.AsyncClient | None = None
         self._on_operationdata: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._on_connect: Callable[[], None] | None = None
 
     @property
     def base_url(self) -> str:
         return self._base_url
+
+    @property
+    def socket_active(self) -> bool:
+        """True once a socket session exists (incl. automatic reconnects)."""
+        return self._sio is not None
+
+    @property
+    def socket_connected(self) -> bool:
+        return self._sio is not None and self._sio.connected
 
     # ---------------- REST ----------------
     async def _get(self, path: str, params: dict | None = None) -> Any:
@@ -89,15 +99,30 @@ class UhiApiClient:
         data = await self._get("/api/operationmode/list")
         return data if isinstance(data, list) else []
 
+    async def get_serial_number(self) -> str | None:
+        """Serial number of the heat pump manager (WPM), if known."""
+        data = await self._get("/api/system/serialnumber")
+        if not isinstance(data, dict):
+            return None
+        serial = data.get("serial_number") or data.get("wpm_serial_number")
+        return str(serial) if serial else None
+
     async def get_operation_mode(self) -> dict:
+        """Current mode: { id, is_automatic_mode, name, dateStart, ... }."""
         data = await self._get("/api/operationmode")
         return data if isinstance(data, dict) else {}
 
-    async def set_operation_mode(self, mode_id: int) -> dict:
-        return await self._put("/api/operationmode", {"id": mode_id})
+    async def set_operation_mode(
+        self, mode_id: int, is_automatic: bool, **extra: Any
+    ) -> dict:
+        """Set the mode; without is_automatic_mode the UHI turns automatic off."""
+        payload = {"id": mode_id, "is_automatic_mode": int(is_automatic), **extra}
+        data = await self._put("/api/operationmode", payload)
+        return data if isinstance(data, dict) else {}
 
     async def set_function_data(self, key: str, value: Any) -> dict:
-        return await self._put(f"/api/functiondata/key/{key}", {"value": value})
+        data = await self._put(f"/api/functiondata/key/{key}", {"value": value})
+        return data if isinstance(data, dict) else {}
 
     async def get_function_data_groups(self, groups: Iterable[str]) -> dict:
         """GET /api/functiondata/groups?groups=...
@@ -115,34 +140,44 @@ class UhiApiClient:
     ) -> None:
         self._on_operationdata = handler
 
+    def set_connect_handler(self, handler: Callable[[], None]) -> None:
+        """Called on every (re)connect of the socket."""
+        self._on_connect = handler
+
     async def connect_socket(self, socket_url: str | None = None) -> None:
         url = (socket_url or self._base_url).rstrip("/")
-        self._sio = socketio.AsyncClient(
+        sio = socketio.AsyncClient(
             reconnection=True,
             reconnection_delay=2,
             logger=False,
             engineio_logger=False,
         )
 
-        @self._sio.event
+        @sio.event
         async def connect() -> None:  # noqa: WPS430
             _LOGGER.debug("Socket.IO connected (%s)", url)
+            if self._on_connect:
+                self._on_connect()
 
-        @self._sio.event
+        @sio.event
         async def disconnect() -> None:  # noqa: WPS430
             _LOGGER.warning("Socket.IO disconnected")
 
-        @self._sio.on(OPERATIONDATA_EVENT)
+        @sio.on(OPERATIONDATA_EVENT)
         async def _on_bundle(data: Any) -> None:  # noqa: WPS430
             values = data.get("payload") if isinstance(data, dict) else None
             if isinstance(values, dict) and self._on_operationdata:
                 await self._on_operationdata(values)
 
-        await self._sio.connect(
+        # python-socketio only reconnects automatically after a successful
+        # first connect; a failed attempt leaves no session behind so the
+        # caller can retry.
+        await sio.connect(
             url,
             socketio_path=SOCKETIO_PATH,
             transports=["websocket", "polling"],
         )
+        self._sio = sio
 
     async def disconnect_socket(self) -> None:
         if self._sio is not None:

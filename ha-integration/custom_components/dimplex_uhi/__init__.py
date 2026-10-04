@@ -31,6 +31,7 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.NUMBER,
     Platform.SELECT,
+    Platform.SWITCH,
 ]
 
 
@@ -58,8 +59,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     await coordinator.async_prepare()
+    # The first refresh also starts the Socket.IO connection (and retries it
+    # on later polls if the UHI is not reachable yet).
     await coordinator.async_config_entry_first_refresh()
-    await coordinator.async_connect_socket(base_url)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 

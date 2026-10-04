@@ -30,9 +30,21 @@
         "data": {
           "language": "Sprache der Entitätsnamen",
           "state_interval": "Abfrageintervall Betriebsdaten (Sekunden)",
-          "version_interval": "Abfrageintervall Version (Sekunden)"
+          "version_interval": "Abfrageintervall Version (Sekunden)",
+          "party_hours": "Dauer Partymodus (Stunden)"
         }
       }
+    }
+  },
+  "exceptions": {
+    "write_failed": {
+      "message": "Schreiben von {key} fehlgeschlagen: {error}"
+    },
+    "mode_unknown": {
+      "message": "Der aktuelle Betriebsmodus ist noch nicht bekannt."
+    },
+    "automatic_timed_mode": {
+      "message": "Der Automatikbetrieb kann während Party/Urlaub nicht umgeschaltet werden."
     }
   }
 }

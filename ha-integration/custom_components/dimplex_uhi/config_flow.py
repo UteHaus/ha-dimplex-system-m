@@ -23,12 +23,14 @@ from .const import (
     CONF_HOST,
     CONF_LANGUAGE,
     CONF_NAME,
+    CONF_PARTY_HOURS,
     CONF_PORT,
     CONF_STATE_INTERVAL,
     CONF_TOKEN,
     CONF_VERSION_INTERVAL,
     DEFAULT_DEVICE_NAME,
     DEFAULT_LANGUAGE,
+    DEFAULT_PARTY_HOURS,
     DEFAULT_STATE_INTERVAL,
     DEFAULT_VERSION_INTERVAL,
     DOMAIN,
@@ -51,7 +53,11 @@ def _build_base_url(host: str, port: int | None = None) -> str:
 
 
 async def _validate(hass, data: dict[str, Any]) -> dict[str, Any]:
-    """Check the connection and determine device master data (MAC)."""
+    """Check the connection and determine a stable device id.
+
+    UHI 4.x reports the MAC; UHI 3.x does not, so fall back to the serial
+    number of the heat pump manager.
+    """
     session = async_get_clientsession(hass)
     base_url = _build_base_url(data[CONF_HOST], data.get(CONF_PORT))
     client = UhiApiClient(
@@ -62,7 +68,13 @@ async def _validate(hass, data: dict[str, Any]) -> dict[str, Any]:
     )
     version = await client.get_version()
     uhi = version.get("uhi") or {}
-    return {"mac": uhi.get("mac"), "base_url": base_url}
+    device_id = uhi.get("mac")
+    if not device_id:
+        try:
+            device_id = await client.get_serial_number()
+        except UhiApiError:
+            device_id = None
+    return {"device_id": device_id, "base_url": base_url}
 
 
 class DimplexUhiConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -84,8 +96,8 @@ class DimplexUhiConfigFlow(ConfigFlow, domain=DOMAIN):
             except Exception:  # noqa: BLE001
                 errors["base"] = "unknown"
             else:
-                if info.get("mac"):
-                    await self.async_set_unique_id(info["mac"])
+                if info.get("device_id"):
+                    await self.async_set_unique_id(info["device_id"])
                     self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=user_input[CONF_NAME], data=user_input
@@ -110,14 +122,11 @@ class DimplexUhiConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return DimplexUhiOptionsFlow(config_entry)
+        return DimplexUhiOptionsFlow()
 
 
 class DimplexUhiOptionsFlow(OptionsFlow):
-    """Adjust language, display name and intervals."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self.config_entry = config_entry
+    """Adjust language and intervals."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -147,6 +156,10 @@ class DimplexUhiOptionsFlow(OptionsFlow):
                         CONF_VERSION_INTERVAL, DEFAULT_VERSION_INTERVAL
                     ),
                 ): vol.All(vol.Coerce(int), vol.Range(min=60, max=86400)),
+                vol.Required(
+                    CONF_PARTY_HOURS,
+                    default=options.get(CONF_PARTY_HOURS, DEFAULT_PARTY_HOURS),
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=72)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -30,9 +30,21 @@
         "data": {
           "language": "Language of entity names",
           "state_interval": "Operation data poll interval (seconds)",
-          "version_interval": "Version poll interval (seconds)"
+          "version_interval": "Version poll interval (seconds)",
+          "party_hours": "Party mode duration (hours)"
         }
       }
+    }
+  },
+  "exceptions": {
+    "write_failed": {
+      "message": "Writing {key} failed: {error}"
+    },
+    "mode_unknown": {
+      "message": "The current operation mode is not known yet."
+    },
+    "automatic_timed_mode": {
+      "message": "Automatic mode cannot be changed during party/holiday mode."
     }
   }
 }

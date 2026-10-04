@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
@@ -61,8 +63,12 @@ class DimplexUhiModeSelect(DimplexUhiEntity, SelectEntity):
         await self.coordinator.async_set_operation_mode(mode_id)
 
 
-class DimplexUhiOptionSelect(DimplexUhiEntity, SelectEntity):
-    """Selection with a fixed value list (e.g. P_EVS), optimistic."""
+class DimplexUhiOptionSelect(DimplexUhiEntity, SelectEntity, RestoreEntity):
+    """Selection with a fixed value list (e.g. P_EVS).
+
+    Not readable via REST; the last known option is restored until the
+    socket reports the value.
+    """
 
     def __init__(self, coordinator: DimplexUhiCoordinator, spec: WritableSpec) -> None:
         super().__init__(coordinator, spec.key)
@@ -73,6 +79,18 @@ class DimplexUhiOptionSelect(DimplexUhiEntity, SelectEntity):
             for value in spec.option_values
         }
         self._value_to_label = {v: k for k, v in self._label_to_value.items()}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is None or last.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return
+        # Labels depend on the language; fall back to the raw value.
+        value = self._label_to_value.get(last.state)
+        if value is None and last.state in self._value_to_label:
+            value = last.state
+        if value is not None:
+            self._optimistic = value
 
     @property
     def available(self) -> bool:
@@ -97,6 +115,8 @@ class DimplexUhiOptionSelect(DimplexUhiEntity, SelectEntity):
         value = self._label_to_value.get(option)
         if value is None:
             return
-        await self.coordinator.async_set_function_data(self._key, int(value))
+        confirmed = coerce_number(
+            await self.coordinator.async_set_function_data(self._key, int(value))
+        )
         self._optimistic = value
-        self.coordinator.apply_local_value(self._key, int(value))
+        self.coordinator.apply_local_value(self._key, confirmed)

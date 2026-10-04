@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -36,8 +36,12 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class DimplexUhiNumber(DimplexUhiEntity, NumberEntity):
-    """Writable numeric parameter (optimistic if not readable)."""
+class DimplexUhiNumber(DimplexUhiEntity, RestoreNumber):
+    """Writable numeric parameter.
+
+    Most of these keys have no UHI read endpoint and only arrive via the
+    socket when they change. Until then the last known value is restored.
+    """
 
     _attr_mode = NumberMode.BOX
 
@@ -74,6 +78,12 @@ class DimplexUhiNumber(DimplexUhiEntity, NumberEntity):
             return self._meta[meta_field]
         return None
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_number_data()
+        if last is not None and last.native_value is not None:
+            self._optimistic = last.native_value
+
     @property
     def available(self) -> bool:
         return self.coordinator.last_update_success
@@ -89,6 +99,8 @@ class DimplexUhiNumber(DimplexUhiEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         payload = int(value) if float(value).is_integer() else value
-        await self.coordinator.async_set_function_data(self._key, payload)
-        self._optimistic = value
-        self.coordinator.apply_local_value(self._key, payload)
+        confirmed = coerce_number(
+            await self.coordinator.async_set_function_data(self._key, payload)
+        )
+        self._optimistic = confirmed
+        self.coordinator.apply_local_value(self._key, confirmed)

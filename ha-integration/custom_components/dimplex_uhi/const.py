@@ -20,6 +20,7 @@ CONF_NAME: Final = "name"
 CONF_LANGUAGE: Final = "language"
 CONF_VERSION_INTERVAL: Final = "version_interval"
 CONF_STATE_INTERVAL: Final = "state_interval"
+CONF_PARTY_HOURS: Final = "party_hours"
 
 DEFAULT_PORT: Final = 8080
 DEFAULT_LANGUAGE: Final = "de"
@@ -28,6 +29,9 @@ SUPPORTED_LANGUAGES: Final = ("de", "en")
 # Poll intervals (seconds)
 DEFAULT_VERSION_INTERVAL: Final = 300
 DEFAULT_STATE_INTERVAL: Final = 60
+
+# Duration used when party/holiday mode is selected (the UHI needs an end).
+DEFAULT_PARTY_HOURS: Final = 4
 
 # Socket.IO
 SOCKETIO_PATH: Final = "/broadcast/socket"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import timedelta
@@ -9,10 +10,25 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import UhiApiClient, UhiApiError
-from .const import CONF_LANGUAGE, DEFAULT_LANGUAGE, DOMAIN, SNAPSHOT_GROUPS
+from .const import (
+    CONF_LANGUAGE,
+    CONF_PARTY_HOURS,
+    DEFAULT_LANGUAGE,
+    DEFAULT_PARTY_HOURS,
+    DOMAIN,
+    SNAPSHOT_GROUPS,
+)
+
+# Live key carrying the active operation mode (same id as /api/operationmode).
+MODE_KEY = "BA_aktiv"
+# Timed modes: the UHI rejects them without an end date.
+MODE_HOLIDAY = 2
+MODE_PARTY = 3
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +47,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"{DOMAIN}_{entry.entry_id}",
             update_interval=timedelta(seconds=state_interval),
         )
@@ -38,6 +55,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self._version_interval = version_interval
         self._last_version_poll: float = 0.0
+        self._last_mode_poll: float = 0.0
+        self._socket_task: asyncio.Task | None = None
+        self._socket_warned = False
 
         # Master data / metadata
         self.definitions: dict[str, dict] = {}
@@ -48,6 +68,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.mode_name_to_id: dict[str, int] = {}
         self.mode_names: list[str] = []
         self.current_mode_id: int | None = None
+        self.is_automatic: bool | None = None
 
         # Platform callbacks to discover new keys dynamically.
         self._known_keys: set[str] = set()
@@ -60,19 +81,53 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_refresh_modes()
         await self._async_refresh_current_mode()
         self.client.set_operationdata_handler(self._handle_live_values)
+        self.client.set_connect_handler(self._handle_socket_connect)
 
-    async def async_connect_socket(self, socket_url: str | None = None) -> None:
+    async def async_connect_socket(self) -> None:
         try:
-            await self.client.connect_socket(socket_url)
+            await self.client.connect_socket()
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Socket.IO connection failed: %s", exc)
+            # Only warn once; retries happen on every poll until it works.
+            log = _LOGGER.debug if self._socket_warned else _LOGGER.warning
+            log("Socket.IO connection failed (retrying on next poll): %s", exc)
+            self._socket_warned = True
+        else:
+            self._socket_warned = False
+
+    @callback
+    def _ensure_socket(self) -> None:
+        """(Re)start the socket connection in the background if needed."""
+        if self.client.socket_active:
+            return
+        if self._socket_task is not None and not self._socket_task.done():
+            return
+        self._socket_task = self.entry.async_create_background_task(
+            self.hass, self.async_connect_socket(), f"{DOMAIN} socket connect"
+        )
+
+    @callback
+    def _handle_socket_connect(self) -> None:
+        """Catch up on changes missed while the socket was down."""
+        self.entry.async_create_background_task(
+            self.hass, self.async_request_refresh(), f"{DOMAIN} refresh on connect"
+        )
 
     # ---------------- Polling ----------------
     async def _async_update_data(self) -> dict[str, Any]:
+        self._ensure_socket()
         now = time.monotonic()
         if now - self._last_version_poll >= self._version_interval:
             await self._async_refresh_version()
-        await self._async_refresh_current_mode()
+        if not self.mode_names:
+            await self._async_refresh_modes()
+        # The mode itself arrives live (BA_aktiv); the automatic flag does not.
+        # Every request runs a script on the UHI and is re-broadcast to all
+        # clients, so only poll it often while the socket is down.
+        if (
+            not self.client.socket_connected
+            or now - self._last_mode_poll >= self._version_interval
+        ):
+            await self._async_refresh_current_mode()
 
         try:
             groups = await self.client.get_function_data_groups(SNAPSHOT_GROUPS)
@@ -134,19 +189,34 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except UhiApiError as exc:
             _LOGGER.debug("Current operation mode not readable: %s", exc)
             return
-        mode = data.get("operationMode") if isinstance(data, dict) else None
-        if isinstance(mode, dict) and mode.get("id") is not None:
+        self._last_mode_poll = time.monotonic()
+        self._apply_mode_response(data)
+
+    @callback
+    def _apply_mode_response(self, data: dict[str, Any]) -> None:
+        """Take over { id, is_automatic_mode, ... } from GET/PUT operationmode."""
+        try:
+            self.current_mode_id = int(data["id"])
+        except (KeyError, ValueError, TypeError):
+            pass
+        auto = data.get("is_automatic_mode")
+        if auto is not None:
             try:
-                self.current_mode_id = int(mode["id"])
+                self.is_automatic = bool(int(auto))
             except (ValueError, TypeError):
-                self.current_mode_id = None
+                pass
 
     # ---------------- Live (Socket.IO) ----------------
     async def _handle_live_values(self, values: dict[str, Any]) -> None:
         merged: dict[str, Any] = dict(self.data or {})
         merged.update(values)
+        if MODE_KEY in values:
+            try:
+                self.current_mode_id = int(values[MODE_KEY])
+            except (ValueError, TypeError):
+                pass
         self._notify_new_keys(merged.keys())
-        self.async_set_updated_data(merged)
+        self._async_push_data(merged)
 
     # ---------------- Dynamic keys ----------------
     @callback
@@ -172,12 +242,28 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         data = dict(self.data or {})
         data[key] = value
-        self.async_set_updated_data(data)
+        self._async_push_data(data)
+
+    @callback
+    def _async_push_data(self, data: dict[str, Any]) -> None:
+        """Publish pushed/locally written data without delaying the next poll.
+
+        async_set_updated_data() would reschedule the REST refresh on every
+        socket bundle, so with steady pushes the snapshot, version and mode
+        polls would never run.
+        """
+        self.data = data
+        self.async_update_listeners()
 
     @property
     def identifier(self) -> str:
-        """Stable identifier (MAC if known, otherwise the config entry id)."""
-        return self.mac or self.entry.entry_id
+        """Stable identifier for unique ids and the device registry.
+
+        Prefer the entry's unique id (MAC on UHI 4.x, WPM serial number on
+        3.x, captured during setup), so a transiently unreadable endpoint at
+        startup does not change all entity unique ids.
+        """
+        return self.entry.unique_id or self.mac or self.entry.entry_id
 
     @property
     def language(self) -> str:
@@ -191,10 +277,55 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return set(self._known_keys)
 
     # ---------------- Writing ----------------
-    async def async_set_function_data(self, key: str, value: Any) -> None:
-        await self.client.set_function_data(key, value)
+    async def async_set_function_data(self, key: str, value: Any) -> Any:
+        """Write a value and return the value confirmed by the UHI."""
+        try:
+            result = await self.client.set_function_data(key, value)
+        except UhiApiError as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="write_failed",
+                translation_placeholders={"key": key, "error": str(exc)},
+            ) from exc
+        confirmed = result.get("value")
+        return value if confirmed is None else confirmed
 
     async def async_set_operation_mode(self, mode_id: int) -> None:
-        await self.client.set_operation_mode(mode_id)
+        extra: dict[str, Any] = {}
+        if mode_id in (MODE_HOLIDAY, MODE_PARTY):
+            hours = self.entry.options.get(CONF_PARTY_HOURS, DEFAULT_PARTY_HOURS)
+            end = dt_util.now() + timedelta(hours=hours)
+            extra["dateEnd"] = end.strftime("%Y-%m-%dT%H:%M:%S")
+        if self.is_automatic is None:
+            # Sending is_automatic_mode=0 blindly would switch automatic off.
+            await self._async_refresh_current_mode()
+        await self._async_put_mode(mode_id, bool(self.is_automatic), **extra)
+
+    async def async_set_automatic(self, enabled: bool) -> None:
+        if self.current_mode_id is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="mode_unknown"
+            )
+        if self.current_mode_id in (MODE_HOLIDAY, MODE_PARTY):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="automatic_timed_mode"
+            )
+        await self._async_put_mode(self.current_mode_id, enabled)
+
+    async def _async_put_mode(
+        self, mode_id: int, is_automatic: bool, **extra: Any
+    ) -> None:
+        try:
+            result = await self.client.set_operation_mode(
+                mode_id, is_automatic, **extra
+            )
+        except UhiApiError as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="write_failed",
+                translation_placeholders={"key": MODE_KEY, "error": str(exc)},
+            ) from exc
         self.current_mode_id = mode_id
+        self.is_automatic = is_automatic
+        self._apply_mode_response(result)
         self.async_update_listeners()

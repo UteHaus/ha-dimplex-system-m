@@ -115,6 +115,12 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
                 self._energy_kwh = float(last.native_value)
             except (TypeError, ValueError):
                 self._energy_kwh = 0.0
+        # Start integrating from the snapshot that is already loaded.
+        try:
+            self._last_power = float((self.coordinator.data or {})[ENERGY_POWER_KEY])
+        except (KeyError, TypeError, ValueError):
+            return
+        self._last_ts = time.monotonic()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -129,9 +135,10 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
             dt = now - self._last_ts
             # Plausibility: only integrate sensible intervals.
             if 0 < dt < 3600:
-                avg_power = (power + self._last_power) / 2.0
+                # The UHI only pushes changes, so the previous value held
+                # for the whole interval (left Riemann sum, not trapezoid).
                 # W * s -> kWh
-                self._energy_kwh += avg_power * dt / 3_600_000.0
+                self._energy_kwh += self._last_power * dt / 3_600_000.0
         self._last_power = power
         self._last_ts = now
         super()._handle_coordinator_update()
