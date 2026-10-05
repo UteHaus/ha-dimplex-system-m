@@ -13,7 +13,7 @@ interfaces (REST + Socket.IO) — **the UHI itself is never modified**.
 
 | Folder | Purpose |
 |--------|---------|
-| [`ha-integration/`](ha-integration/) | Native Home Assistant custom component `dimplex_uhi` (recommended). |
+| [`custom_components/dimplex_uhi/`](custom_components/dimplex_uhi/) | Native Home Assistant custom component `dimplex_uhi` (recommended); docs in [`ha-integration/README.md`](ha-integration/README.md), tests in [`tests/`](tests/). |
 | [`ha-bridge/`](ha-bridge/) | Optional UHI → MQTT bridge test setup (Docker Compose: Mosquitto + HA + bridge + SSH tunnel). |
 | [`tools/`](tools/) | Helper scripts: SSH tunnel, firewall allow-rule, name/metadata generator. |
 
@@ -25,7 +25,7 @@ Install the custom component and add it through the HA UI. See
 [`ha-integration/README.md`](ha-integration/README.md).
 
 - Install via HACS (custom repository, type *Integration*) **or** copy
-  `ha-integration/custom_components/dimplex_uhi` into `config/custom_components`.
+  `custom_components/dimplex_uhi` into `config/custom_components`.
 - Restart HA → *Settings → Devices & Services → Add Integration → Dimplex
   System M (UHI)* → enter the UHI host/port.
 
@@ -39,14 +39,14 @@ services:
     image: ghcr.io/home-assistant/home-assistant:stable
     volumes:
       - ./config:/config
-      - ./dimplex-ha-system-m/ha-integration/custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi:ro
+      - ./dimplex-ha-system-m/custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi:ro
 ```
 
 ```bash
 # or with plain docker run
 docker run -d --name homeassistant \
   -v "$PWD/config:/config" \
-  -v "$PWD/dimplex-ha-system-m/ha-integration/custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi:ro" \
+  -v "$PWD/dimplex-ha-system-m/custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi:ro" \
   ghcr.io/home-assistant/home-assistant:stable
 ```
 
@@ -109,7 +109,7 @@ See [`tools/`](tools/) for both scripts. They are interactive (prompt for
 ## Icons / branding
 
 The official Dimplex artwork for the `dimplex_uhi` domain lives in
-[`ha-integration/custom_components/dimplex_uhi/brands/`](ha-integration/custom_components/dimplex_uhi/brands/).
+[`custom_components/dimplex_uhi/brands/`](custom_components/dimplex_uhi/brands/).
 Home Assistant only shows it once submitted to the
 [home-assistant/brands](https://github.com/home-assistant/brands) repo under
 `custom_integrations/dimplex_uhi/`; until then per-entity icons are used.
@@ -139,7 +139,7 @@ The same check runs on GitHub for every push and pull request.
 
 Releases are built by GitHub Actions when a version tag is pushed:
 
-1. Set `version` in `ha-integration/custom_components/dimplex_uhi/manifest.json`
+1. Set `version` in `custom_components/dimplex_uhi/manifest.json`
    (e.g. `0.2.0`) and commit it.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
 

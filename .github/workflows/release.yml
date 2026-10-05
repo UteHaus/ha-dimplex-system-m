@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 env:
-  INTEGRATION_DIR: ha-integration/custom_components/dimplex_uhi
+  INTEGRATION_DIR: custom_components/dimplex_uhi
   ZIP_NAME: dimplex_uhi.zip
 
 jobs:
@@ -38,7 +38,6 @@ jobs:
         run: uvx ruff check --output-format=github .
 
       - name: Tests
-        working-directory: ha-integration
         run: |
           uv venv
           uv pip install -r requirements_test.txt

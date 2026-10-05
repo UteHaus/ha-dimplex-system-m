@@ -2,9 +2,9 @@
 """Extrahiert lesbare Namen aus den UHI-i18n-Dateien und bündelt deviceKeys.json.
 
 Erzeugt:
-  ha-integration/custom_components/dimplex_uhi/data/names_de.json
-  ha-integration/custom_components/dimplex_uhi/data/names_en.json
-  ha-integration/custom_components/dimplex_uhi/data/device_keys.json
+  custom_components/dimplex_uhi/data/names_de.json
+  custom_components/dimplex_uhi/data/names_en.json
+  custom_components/dimplex_uhi/data/device_keys.json
 
 Quellen (relativ zum Repo-Root):
   DE: uhi/config/i18n/de/de.common.json + de.easyon.json
@@ -269,7 +269,6 @@ def main() -> int:
     uhi_root = Path(args.uhi_root).resolve()
     out_dir = (
         Path(__file__).resolve().parent.parent
-        / "ha-integration"
         / "custom_components"
         / "dimplex_uhi"
         / "data"

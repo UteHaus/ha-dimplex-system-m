@@ -35,7 +35,7 @@ itself.
 
 ## Manual installation
 
-Copy the `custom_components/dimplex_uhi` folder into the
+Copy the [`custom_components/dimplex_uhi`](../custom_components/dimplex_uhi/) folder (repository root) into the
 `config/custom_components` directory of Home Assistant and restart Home
 Assistant.
 
@@ -90,7 +90,7 @@ pip install -r requirements_test.txt
 pytest
 ```
 
-Run from this directory (`ha-integration/`).
+Run from the repository root; the tests live in [`tests/`](../tests/).
 
 ## Data source
 
