@@ -29,7 +29,7 @@
         "title": "Options",
         "data": {
           "language": "Language of entity names",
-          "state_interval": "Operation data poll interval (seconds)",
+          "state_interval": "Poll interval without socket connection (seconds)",
           "version_interval": "Version poll interval (seconds)",
           "party_hours": "Party mode duration (hours)"
         }

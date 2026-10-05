@@ -29,7 +29,7 @@
         "title": "Optionen",
         "data": {
           "language": "Sprache der Entitätsnamen",
-          "state_interval": "Abfrageintervall Betriebsdaten (Sekunden)",
+          "state_interval": "Abfrageintervall ohne Socket-Verbindung (Sekunden)",
           "version_interval": "Abfrageintervall Version (Sekunden)",
           "party_hours": "Dauer Partymodus (Stunden)"
         }

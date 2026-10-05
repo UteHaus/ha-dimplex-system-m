@@ -23,6 +23,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import DimplexUhiCoordinator
+from .names import preload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ),
     )
 
+    # The name/metadata files are cached after this; entities read them in
+    # the event loop.
+    await hass.async_add_executor_job(preload, coordinator.language)
     await coordinator.async_prepare()
     # The first refresh also starts the Socket.IO connection (and retries it
     # on later polls if the UHI is not reachable yet).

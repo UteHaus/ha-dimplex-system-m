@@ -1,6 +1,7 @@
-"""Tests for dimplex_uhi against UHI 3.1.4 response formats."""
+"""Tests for dimplex_uhi (UHI 4.3.4 on the device; 3.x formats as fallback)."""
 
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
@@ -14,7 +15,11 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 import custom_components.dimplex_uhi.api  # noqa: F401
-from custom_components.dimplex_uhi.api import UhiApiError
+from custom_components.dimplex_uhi.api import (
+    UhiApiClient,
+    UhiApiError,
+    parse_api_response,
+)
 
 DOMAIN = "dimplex_uhi"
 SERIAL = "WPM123456"
@@ -205,9 +210,79 @@ async def test_socket_retry_and_refresh_on_connect(hass: HomeAssistant, api) -> 
     assert api["connect_socket"].await_count == 2
 
     calls = api["get_function_data_groups"].await_count
-    coord._handle_socket_connect()
+    coord._handle_socket_connect()  # first connect after setup: no extra poll
+    await hass.async_block_till_done()
+    assert api["get_function_data_groups"].await_count == calls
+    coord._handle_socket_connect()  # reconnect: catch up
     await hass.async_block_till_done()
     assert api["get_function_data_groups"].await_count == calls + 1
+
+
+async def test_connected_socket_skips_snapshot(hass: HomeAssistant, api) -> None:
+    _, coord = await _setup(hass)
+    calls = api["get_function_data_groups"].await_count
+    with patch.object(
+        UhiApiClient, "socket_connected", new_callable=PropertyMock, return_value=True
+    ):
+        await coord.async_refresh()
+        assert api["get_function_data_groups"].await_count == calls
+        coord._last_snapshot -= 601
+        await coord.async_refresh()
+        assert api["get_function_data_groups"].await_count == calls + 1
+
+
+def _api_response(body, path="", x_route=None, status=200):
+    headers = {"x-route": x_route} if x_route else {}
+    return {
+        "request": {"headers": headers, "path": path},
+        "response": {"statusCode": status, "headers": {}, "body": json.dumps(body)},
+        "_meta": {},
+    }
+
+
+def test_parse_api_response() -> None:
+    body = {"key": "P_EVS", "value": 2.0}
+    assert parse_api_response(_api_response(body, x_route="functiondata.key")) == (
+        "functiondata.key",
+        body,
+    )
+    assert parse_api_response(
+        _api_response(body, path="/api/v2/functiondata/key/P_EVS")
+    ) == ("functiondata.key", body)
+    assert parse_api_response(_api_response({}, path="/api/operationmode")) == (
+        "operationmode",
+        {},
+    )
+    assert parse_api_response(_api_response(body, status=500)) is None
+    assert parse_api_response("garbage") is None
+
+
+async def test_api_response_pushes(hass: HomeAssistant, api) -> None:
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "select", DOMAIN, f"{SERIAL}_P_EVS", suggested_object_id="evs"
+    )
+    _, coord = await _setup(hass)
+    handle = coord._handle_api_response
+
+    # Write on the touch display (not part of the change bundles).
+    handle("functiondata.key", {"key": "P_EVS", "value": 2.0})
+    await hass.async_block_till_done()
+    assert hass.states.get("select.evs").state == "Dauerhaft"
+
+    # Re-broadcast group snapshot.
+    handle(
+        "functiondata.groups",
+        {"GROUP_01": [{"key": "P_WW_SOLL", "value": "52", "definition": {}}]},
+    )
+    assert coord.data["P_WW_SOLL"] == "52"
+
+    # Operation mode incl. automatic flag; the list response is ignored.
+    handle("operationmode", {"id": 0, "is_automatic_mode": 0, "name": "Sommer"})
+    handle("operationmode.list", [{"id": "1", "name": "Winter"}])
+    await hass.async_block_till_done()
+    assert _state(hass, "BA_aktiv").state == "Sommer"
+    assert _state(hass, "P_TBaUs").state == "off"
 
 
 async def test_energy_left_riemann(hass: HomeAssistant, api) -> None:

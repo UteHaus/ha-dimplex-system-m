@@ -41,9 +41,9 @@ Assistant.
 
 ## Options
 
-Use *Configure* to adjust the language, the polling intervals for operating
-data and version, and the duration used when party mode is selected (the UHI
-requires an end time for it).
+Use *Configure* to adjust the language, the poll interval used while the
+Socket.IO connection is down, the version poll interval, and the duration used
+when party mode is selected (the UHI requires an end time for it).
 
 ## Connecting to UHI
 
@@ -63,19 +63,22 @@ integration host.
   was never set or reported stays unknown, and a change made directly on the
   heat pump while Home Assistant was offline is only picked up on its next
   change.
-- The UHI only pushes changes it detects on the heat pump manager (WPM).
-  Changes made through the UHI itself (touch display, UHI app) are not pushed,
-  except for the operation mode, so Home Assistant does not see them.
+- Live data comes from two Socket.IO events: change bundles for values the UHI
+  reads from the heat pump manager (WPM), and the `api.response` broadcasts the
+  UHI sends for API calls of any client. The latter also carries writes made
+  on the UHI touch display or app, group snapshots and the operation mode
+  including the automatic flag (UHI 4.x re-runs these requests whenever one of
+  their values changes).
 - The UHI does not validate written values against min/max; the limits of the
   number entities are the only safeguard.
 - Changing the operation mode keeps the current automatic setting. Party mode
   ends after the configured duration; the end time is sent in Home Assistant's
   local time, so the UHI should use the same time zone.
-- If the Socket.IO connection cannot be established at startup, it is retried
-  on every poll. After every (re)connect a refresh is triggered.
-- Every API request runs a script on the UHI and is re-broadcast to all its
-  socket clients, so keep the poll interval moderate. While the socket is
-  connected, the operation mode is only polled at the version interval.
+- Every API request runs a script on the UHI, so the REST snapshot (groups and
+  operation mode) is only a safety net while the socket is connected: it runs
+  every 10 minutes, otherwise at the configured interval. If the socket cannot
+  be established, it is retried on every poll; after a reconnect a full
+  refresh is triggered.
 - UHI 3.x does not report a MAC address; the serial number of the heat pump
   manager is used as the unique id instead.
 - Values are already delivered display-ready (scaled) by the UHI.

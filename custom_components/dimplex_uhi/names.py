@@ -43,6 +43,12 @@ def normalize_language(language: str | None) -> str:
     return DEFAULT_LANGUAGE
 
 
+def preload(language: str) -> None:
+    """Load the data files (blocking I/O; run in the executor at setup)."""
+    _load_names(normalize_language(language))
+    _load_device_keys()
+
+
 def device_keys() -> dict[str, dict]:
     """Bundled deviceKeys metadata (fallback source)."""
     return _load_device_keys()

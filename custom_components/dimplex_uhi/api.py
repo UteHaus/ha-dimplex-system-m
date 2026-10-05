@@ -10,13 +10,14 @@ Only existing endpoints/socket are used – NO change to the UHI.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
+import json
 import logging
 from typing import Any
 
 import aiohttp
 import socketio
 
-from .const import OPERATIONDATA_EVENT, SOCKETIO_PATH
+from .const import API_RESPONSE_EVENT, OPERATIONDATA_EVENT, SOCKETIO_PATH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +28,43 @@ class UhiApiError(Exception):
 
 class UhiAuthError(UhiApiError):
     """Authentication failed (401/403)."""
+
+
+def _route_from_path(path: str) -> str:
+    """'/api/v2/functiondata/key/P_EVS?x' -> 'functiondata.key'."""
+    parts = [p for p in path.split("?", 1)[0].split("/") if p]
+    while parts and parts[0] in ("api", "v2"):
+        parts.pop(0)
+    return ".".join(parts[:2])
+
+
+def parse_api_response(data: Any) -> tuple[str, Any] | None:
+    """Extract (route, body) from a successful 'api.response' broadcast.
+
+    Payload: { request: { headers, path, ... }, response: { statusCode,
+    headers, body } }. The route is the client's or the UHI's 'x-route'
+    header; requests without one (like ours) fall back to the URL path.
+    """
+    if not isinstance(data, dict):
+        return None
+    request = data.get("request") or {}
+    response = data.get("response") or {}
+    if not isinstance(request, dict) or not isinstance(response, dict):
+        return None
+    if response.get("statusCode") != 200:
+        return None
+    route = (request.get("headers") or {}).get("x-route") or (
+        response.get("headers") or {}
+    ).get("x-route")
+    if not route:
+        route = _route_from_path(request.get("path") or request.get("url") or "")
+    body = response.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return None
+    return (route, body) if route else None
 
 
 class UhiApiClient:
@@ -52,6 +90,7 @@ class UhiApiClient:
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
         self._on_connect: Callable[[], None] | None = None
+        self._on_api_response: Callable[[str, Any], None] | None = None
 
     @property
     def base_url(self) -> str:
@@ -152,6 +191,10 @@ class UhiApiClient:
         """Called on every (re)connect of the socket."""
         self._on_connect = handler
 
+    def set_api_response_handler(self, handler: Callable[[str, Any], None]) -> None:
+        """Called with (route, body) for every successful 'api.response'."""
+        self._on_api_response = handler
+
     async def connect_socket(self, socket_url: str | None = None) -> None:
         url = (socket_url or self._base_url).rstrip("/")
         sio = socketio.AsyncClient(
@@ -176,6 +219,12 @@ class UhiApiClient:
             values = data.get("payload") if isinstance(data, dict) else None
             if isinstance(values, dict) and self._on_operationdata:
                 await self._on_operationdata(values)
+
+        @sio.on(API_RESPONSE_EVENT)
+        async def _on_api_response(data: Any) -> None:
+            parsed = parse_api_response(data)
+            if parsed is not None and self._on_api_response:
+                self._on_api_response(*parsed)
 
         # python-socketio only reconnects automatically after a successful
         # first connect; a failed attempt leaves no session behind so the

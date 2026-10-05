@@ -36,6 +36,13 @@ DEFAULT_PARTY_HOURS: Final = 4
 # Socket.IO
 SOCKETIO_PATH: Final = "/broadcast/socket"
 OPERATIONDATA_EVENT: Final = "uhi.collector.operationdata.change-bundle"
+# The UHI re-broadcasts API responses (its own re-runs and every proxied
+# request of any client, e.g. writes from the touch display).
+API_RESPONSE_EVENT: Final = "api.response"
+
+# While the socket is connected the data arrives as push; the REST snapshot
+# is only a safety net (each request runs a script on the UHI).
+CONNECTED_POLL_INTERVAL: Final = 600
 
 # All known operating-data groups for the snapshot via
 # GET /api/functiondata/groups.

@@ -18,6 +18,7 @@ from .api import UhiApiClient, UhiApiError
 from .const import (
     CONF_LANGUAGE,
     CONF_PARTY_HOURS,
+    CONNECTED_POLL_INTERVAL,
     DEFAULT_LANGUAGE,
     DEFAULT_PARTY_HOURS,
     DOMAIN,
@@ -55,7 +56,8 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self._version_interval = version_interval
         self._last_version_poll: float = 0.0
-        self._last_mode_poll: float = 0.0
+        self._last_snapshot: float = 0.0
+        self._socket_seen = False
         self._socket_task: asyncio.Task | None = None
         self._socket_warned = False
 
@@ -82,6 +84,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_refresh_current_mode()
         self.client.set_operationdata_handler(self._handle_live_values)
         self.client.set_connect_handler(self._handle_socket_connect)
+        self.client.set_api_response_handler(self._handle_api_response)
 
     async def async_connect_socket(self) -> None:
         try:
@@ -108,6 +111,11 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @callback
     def _handle_socket_connect(self) -> None:
         """Catch up on changes missed while the socket was down."""
+        if not self._socket_seen:
+            # First connect right after setup: the snapshot is fresh.
+            self._socket_seen = True
+            return
+        self._last_snapshot = 0.0
         self.entry.async_create_background_task(
             self.hass, self.async_request_refresh(), f"{DOMAIN} refresh on connect"
         )
@@ -120,35 +128,44 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_refresh_version()
         if not self.mode_names:
             await self._async_refresh_modes()
-        # The mode itself arrives live (BA_aktiv); the automatic flag does not.
-        # Every request runs a script on the UHI and is re-broadcast to all
-        # clients, so only poll it often while the socket is down.
+        # With a connected socket values, groups and mode arrive as push
+        # (change bundles and re-broadcast API responses), so the snapshot is
+        # only a safety net. Every request runs a script on the UHI.
         if (
-            not self.client.socket_connected
-            or now - self._last_mode_poll >= self._version_interval
+            self.client.socket_connected
+            and now - self._last_snapshot < CONNECTED_POLL_INTERVAL
         ):
-            await self._async_refresh_current_mode()
+            return dict(self.data or {})
+        await self._async_refresh_current_mode()
 
         try:
             groups = await self.client.get_function_data_groups(SNAPSHOT_GROUPS)
         except UhiApiError as exc:
             raise UpdateFailed(str(exc)) from exc
+        self._last_snapshot = time.monotonic()
 
         values: dict[str, Any] = dict(self.data or {})
         for group_name, items in groups.items():
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                key = item.get("key")
-                if key is None:
-                    continue
-                values[key] = item.get("value")
-                self.key_group[key] = group_name
-                definition = item.get("definition")
-                if isinstance(definition, dict):
-                    self.definitions[key] = definition
+            self._merge_items(values, items, group_name)
         self._notify_new_keys(values.keys())
         return values
+
+    def _merge_items(
+        self, values: dict[str, Any], items: Any, group_name: str | None
+    ) -> None:
+        """Merge [{ key, value, definition }, ...] into values/metadata."""
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or item.get("key") is None:
+                continue
+            key = item["key"]
+            values[key] = item.get("value")
+            if group_name is not None:
+                self.key_group[key] = group_name
+            definition = item.get("definition")
+            if isinstance(definition, dict):
+                self.definitions[key] = definition
 
     async def _async_refresh_version(self) -> None:
         try:
@@ -189,7 +206,6 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except UhiApiError as exc:
             _LOGGER.debug("Current operation mode not readable: %s", exc)
             return
-        self._last_mode_poll = time.monotonic()
         self._apply_mode_response(data)
 
     @callback
@@ -217,6 +233,32 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 pass
         self._notify_new_keys(merged.keys())
         self._async_push_data(merged)
+
+    @callback
+    def _handle_api_response(self, route: str, body: Any) -> None:
+        """Take over API responses the UHI broadcasts to all clients."""
+        if route.startswith("operationmode"):
+            # GET/PUT return the mode object, /list a list (ignored).
+            if isinstance(body, dict) and "id" in body:
+                self._apply_mode_response(body)
+                self.async_update_listeners()
+            return
+        values: dict[str, Any] = dict(self.data or {})
+        if route == "functiondata.groups" and isinstance(body, dict):
+            for group_name, items in body.items():
+                self._merge_items(values, items, group_name)
+        elif route == "functiondata.group":
+            self._merge_items(values, body, None)
+        elif route == "functiondata.key" and isinstance(body, dict):
+            # Writes of any client, e.g. the UHI touch display; these are
+            # not part of the change bundles.
+            if body.get("key") is None or body.get("value") is None:
+                return
+            values[body["key"]] = body["value"]
+        else:
+            return
+        self._notify_new_keys(values.keys())
+        self._async_push_data(values)
 
     # ---------------- Dynamic keys ----------------
     @callback
