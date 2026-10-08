@@ -45,6 +45,12 @@
     },
     "automatic_timed_mode": {
       "message": "Der Automatikbetrieb kann während Party/Urlaub nicht umgeschaltet werden."
+    },
+    "automatic_required": {
+      "message": "Die Grenzen der Automatik lassen sich nur bei eingeschaltetem Automatikbetrieb ändern."
+    },
+    "ww_below_minimum": {
+      "message": "Die Warmwasser-Solltemperatur darf das Warmwasser-Minimum ({minimum} °C) nicht unterschreiten."
     }
   }
 }

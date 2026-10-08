@@ -11,10 +11,21 @@ itself.
 
 - **Live operating data** via Socket.IO (push) with a periodic REST snapshot.
 - **Readable entity names** (DE/EN) from the UHI i18n data, selectable per device.
-- **Writable parameters**:
-  - Operating mode (`BA_aktiv`) and automatic mode switching (`P_TBaUs`)
-  - Power/electricity source `P_EVS` (power stage 3 / permanent / limit-temperature dependent)
-  - Domestic hot water setpoints, heating curve and utility (EVU) parameters
+- **Adjustable settings** – exactly what the UHI user interface offers an
+  operator, with the limits the UHI reports:
+  - Operating mode and automatic mode switching, including its heating and
+    cooling limit and switching delay
+  - Setpoint of each heating unit: heating curve shift (or flow/room setpoint,
+    depending on the circuit type), hot water, and the pool if it delivers a
+    reading
+  - Rapid heating level of the heating circuits
+  - Hot water minimum temperature (`P_WW_MIN_TEMP`)
+- **Commissioning parameters** (EVU lock `P_EVS`, `P_EVSGT`, heating curve end
+  point, max. return temperature, fixed setpoint, room control limit, hot water
+  max. temperature) are shown read-only; they are set via the EasyOn wizard of
+  the UHI.
+- **Smart Grid** state (low / normal / high / problem) as reported by the WPM
+  (read-only, see [Smart Grid](#smart-grid-sg-ready)).
 - **Units and device classes** are assigned automatically (temperature, pressure,
   power, voltage, energy, etc.), including correct icons and long-term statistics.
 - **Energy meter**: a derived `Power consumption` sensor integrates the AC power
@@ -45,6 +56,20 @@ Use *Configure* to adjust the language, the poll interval used while the
 Socket.IO connection is down, the version poll interval, and the duration used
 when party mode is selected (the UHI requires an end time for it).
 
+### Smart Grid (SG Ready)
+
+The integration shows the Smart Grid state the WPM reports. It cannot set it:
+the UHI offers no Smart Grid control, and the WPM's Smart Grid flags
+(`SmartGrid_Niedrig/Normal/Hoch`) are inputs of the WPM. Tested on UHI 4.3.4:
+the UHI accepts a write to these flags, but the WPM overwrites it with its own
+state at the next synchronisation (within about a minute).
+
+To control Smart Grid from Home Assistant, use the SG Ready terminals of the
+WPM as intended by Dimplex: two potential-free contacts (e.g. relays switched
+by Home Assistant) on the WPM's SG Ready inputs, with Smart Grid enabled in the
+commissioning (EasyOn) of the WPM. The integration then shows the resulting
+state.
+
 ## Connecting to UHI
 
 The UHI firewall blocks the API port on the network. If Home Assistant cannot
@@ -56,13 +81,11 @@ integration host.
 
 ## Notes
 
-- Some writable parameters (Easyon/commissioning values such as `P_EVS`,
-  `P_HK1_*`, `P_EVSGT`) have no UHI read endpoint; the UHI only pushes them via
-  Socket.IO when they change. After a restart these entities show the last
-  value known to Home Assistant until the UHI reports a new one. A value that
-  was never set or reported stays unknown, and a change made directly on the
-  heat pump while Home Assistant was offline is only picked up on its next
-  change.
+- The commissioning parameters have no UHI read endpoint; the UHI only
+  pushes them via Socket.IO when they change. They stay unknown until then;
+  afterwards the last value is restored after a restart.
+- Heating units are read once at setup; a unit added later on the WPM appears
+  after reloading the integration.
 - Live data comes from two Socket.IO events: change bundles for values the UHI
   reads from the heat pump manager (WPM), and the `api.response` broadcasts the
   UHI sends for API calls of any client. The latter also carries writes made
@@ -70,7 +93,12 @@ integration host.
   including the automatic flag (UHI 4.x re-runs these requests whenever one of
   their values changes).
 - The UHI does not validate written values against min/max; the limits of the
-  number entities are the only safeguard.
+  number entities are the only safeguard. Limits reported by the UHI take
+  precedence over the built-in ones.
+- Robustness against UHI updates: if the UHI rejects a snapshot group (e.g.
+  renamed or removed), the groups are read one by one and the failing one is
+  skipped (logged, retried hourly). If the socket is connected but no change
+  bundle arrives for 5 minutes, the regular poll interval applies again.
 - Changing the operation mode keeps the current automatic setting. Party mode
   ends after the configured duration; the end time is sent in Home Assistant's
   local time, so the UHI should use the same time zone.

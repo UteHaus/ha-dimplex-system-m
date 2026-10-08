@@ -43,6 +43,11 @@ API_RESPONSE_EVENT: Final = "api.response"
 # While the socket is connected the data arrives as push; the REST snapshot
 # is only a safety net (each request runs a script on the UHI).
 CONNECTED_POLL_INTERVAL: Final = 600
+# Without a change bundle for this long the socket counts as silent (e.g. an
+# event renamed by a UHI update) and the regular poll interval applies again.
+SOCKET_SILENT_AFTER: Final = 300
+# Groups the UHI rejected (e.g. removed by an update) are retried after this.
+SKIPPED_GROUP_RETRY: Final = 3600
 
 # All known operating-data groups for the snapshot via
 # GET /api/functiondata/groups.

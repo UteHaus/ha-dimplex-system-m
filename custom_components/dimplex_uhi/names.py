@@ -70,6 +70,11 @@ def resolve_name(key: str, language: str, meta: dict | None = None) -> str:
     return _humanize(key)
 
 
+def label(language: str, german: str, english: str) -> str:
+    """Pick the German or English text for names the UHI does not provide."""
+    return german if normalize_language(language) == "de" else english
+
+
 def resolve_option_label(key: str, value: str, language: str) -> str:
     """Return the label of a select option (e.g. P_EVS.1)."""
     names = _load_names(normalize_language(language))

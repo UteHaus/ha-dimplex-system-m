@@ -45,6 +45,12 @@
     },
     "automatic_timed_mode": {
       "message": "Automatic mode cannot be changed during party/holiday mode."
+    },
+    "automatic_required": {
+      "message": "The automatic mode limits can only be changed while automatic mode is on."
+    },
+    "ww_below_minimum": {
+      "message": "The hot water setpoint must not be below the hot water minimum ({minimum} °C)."
     }
   }
 }

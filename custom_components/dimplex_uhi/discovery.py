@@ -8,7 +8,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DimplexUhiCoordinator
-from .models import WRITABLE_SPECS, classify_platform
+from .models import COMMISSIONING_KEYS, WRITABLE_SPECS, classify_platform
 from .names import device_keys
 
 
@@ -27,7 +27,7 @@ def setup_dynamic_entities(
     def _add(keys: Iterable[str]) -> None:
         new_entities = []
         for key in keys:
-            if key in added or key in WRITABLE_SPECS:
+            if key in added or key in WRITABLE_SPECS or key in COMMISSIONING_KEYS:
                 continue
             meta = keys_meta.get(key)
             definition = coordinator.definitions.get(key)

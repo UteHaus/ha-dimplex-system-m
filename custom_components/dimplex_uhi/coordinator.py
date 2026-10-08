@@ -14,7 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import UhiApiClient, UhiApiError
+from .api import UhiApiClient, UhiApiError, UhiAuthError, path_parts
 from .const import (
     CONF_LANGUAGE,
     CONF_PARTY_HOURS,
@@ -22,7 +22,9 @@ from .const import (
     DEFAULT_LANGUAGE,
     DEFAULT_PARTY_HOURS,
     DOMAIN,
+    SKIPPED_GROUP_RETRY,
     SNAPSHOT_GROUPS,
+    SOCKET_SILENT_AFTER,
 )
 
 # Live key carrying the active operation mode (same id as /api/operationmode).
@@ -30,6 +32,11 @@ MODE_KEY = "BA_aktiv"
 # Timed modes: the UHI rejects them without an end date.
 MODE_HOLIDAY = 2
 MODE_PARTY = 3
+# Automatic mode switching limits of the operationmode API.
+MODE_LIMIT_FIELDS = ("limitTempHeating", "limitTempCooling", "delayTimeHours")
+HOT_WATER_UNIT = "WW"
+POOL_TYPE = "SCHWIMMBAD"
+WW_MIN_KEY = "P_WW_MIN_TEMP"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +65,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_version_poll: float = 0.0
         self._last_snapshot: float = 0.0
         self._socket_seen = False
+        self._last_bundle: float = 0.0
+        # group -> monotonic time it was skipped
+        self._skipped_groups: dict[str, float] = {}
         self._socket_task: asyncio.Task | None = None
         self._socket_warned = False
 
@@ -71,6 +81,10 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.mode_names: list[str] = []
         self.current_mode_id: int | None = None
         self.is_automatic: bool | None = None
+        self.mode_limits: dict[str, float] = {}
+        # Heating units (circuits, rooms, hot water, pool) by id; each:
+        # { id, type, name, min, max, step, target, current, rapidheating }
+        self.heating_units: dict[str, dict[str, Any]] = {}
 
         # Platform callbacks to discover new keys dynamically.
         self._known_keys: set[str] = set()
@@ -82,6 +96,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_refresh_version()
         await self._async_refresh_modes()
         await self._async_refresh_current_mode()
+        await self._async_refresh_heating_units()
         self.client.set_operationdata_handler(self._handle_live_values)
         self.client.set_connect_handler(self._handle_socket_connect)
         self.client.set_api_response_handler(self._handle_api_response)
@@ -111,6 +126,8 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @callback
     def _handle_socket_connect(self) -> None:
         """Catch up on changes missed while the socket was down."""
+        # Grace period until the first change bundle arrives.
+        self._last_bundle = time.monotonic()
         if not self._socket_seen:
             # First connect right after setup: the snapshot is fresh.
             self._socket_seen = True
@@ -131,15 +148,13 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # With a connected socket values, groups and mode arrive as push
         # (change bundles and re-broadcast API responses), so the snapshot is
         # only a safety net. Every request runs a script on the UHI.
-        if (
-            self.client.socket_connected
-            and now - self._last_snapshot < CONNECTED_POLL_INTERVAL
-        ):
+        if self.socket_alive and now - self._last_snapshot < CONNECTED_POLL_INTERVAL:
             return dict(self.data or {})
         await self._async_refresh_current_mode()
+        await self._async_refresh_heating_units()
 
         try:
-            groups = await self.client.get_function_data_groups(SNAPSHOT_GROUPS)
+            groups = await self._async_fetch_groups()
         except UhiApiError as exc:
             raise UpdateFailed(str(exc)) from exc
         self._last_snapshot = time.monotonic()
@@ -149,6 +164,62 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._merge_items(values, items, group_name)
         self._notify_new_keys(values.keys())
         return values
+
+    @property
+    def socket_alive(self) -> bool:
+        """Connected and actually delivering change bundles."""
+        return (
+            self.client.socket_connected
+            and time.monotonic() - self._last_bundle < SOCKET_SILENT_AFTER
+        )
+
+    async def _async_fetch_groups(self) -> dict[str, Any]:
+        """Read all snapshot groups, tolerating groups the UHI rejects.
+
+        The UHI fails the whole request if a single group is unknown or one
+        of its variables is unreadable (e.g. after a UHI update). Then fall
+        back to one request per group and skip the failing ones for a while.
+        """
+        now = time.monotonic()
+        wanted = [
+            group
+            for group in SNAPSHOT_GROUPS
+            if now - self._skipped_groups.get(group, -SKIPPED_GROUP_RETRY)
+            >= SKIPPED_GROUP_RETRY
+        ]
+        try:
+            return await self.client.get_function_data_groups(wanted)
+        except UhiAuthError:
+            raise
+        except UhiApiError as exc:
+            if len(wanted) == 1:
+                raise
+            _LOGGER.debug("Group request failed, reading groups one by one: %s", exc)
+
+        groups: dict[str, Any] = {}
+        failed: dict[str, UhiApiError] = {}
+        for group in wanted:
+            try:
+                groups.update(await self.client.get_function_data_groups([group]))
+            except UhiAuthError:
+                raise
+            except UhiApiError as exc:
+                failed[group] = exc
+        if not groups:
+            # Nothing readable: a connection problem, not a changed UHI.
+            raise next(iter(failed.values()))
+        for group, exc in failed.items():
+            if group not in self._skipped_groups:
+                _LOGGER.warning(
+                    "UHI group %s is not readable and is skipped (retry in %d s): %s",
+                    group,
+                    SKIPPED_GROUP_RETRY,
+                    exc,
+                )
+            self._skipped_groups[group] = now
+        for group in groups:
+            self._skipped_groups.pop(group, None)
+        return groups
 
     def _merge_items(
         self, values: dict[str, Any], items: Any, group_name: str | None
@@ -221,9 +292,71 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.is_automatic = bool(int(auto))
             except (ValueError, TypeError):
                 pass
+        for field in MODE_LIMIT_FIELDS:
+            if isinstance(data.get(field), (int, float)):
+                self.mode_limits[field] = data[field]
+
+    async def _async_refresh_heating_units(self) -> None:
+        """Read the heating units the UHI offers for adjustment."""
+        try:
+            configs = await self.client.get_heating_units()
+        except UhiApiError as exc:
+            _LOGGER.debug("Heating units not readable: %s", exc)
+            return
+        for config in configs:
+            if not isinstance(config, dict) or not config.get("id"):
+                continue
+            unit_id = str(config["id"])
+            if not config.get("variableValues"):
+                # The pool is listed without values; fetch them separately.
+                try:
+                    config[
+                        "variableValues"
+                    ] = await self.client.get_heating_unit_temperature(unit_id)
+                except UhiApiError:
+                    config["variableValues"] = {}
+            self._apply_heating_unit_config(config)
+
+    @callback
+    def _apply_heating_unit_config(self, config: dict[str, Any]) -> None:
+        unit_id = str(config["id"])
+        limits = config.get("targetTemperature") or {}
+        caps = config.get("capabilities") or {}
+        values = config.get("variableValues") or {}
+        unit = self.heating_units.setdefault(unit_id, {"id": unit_id})
+        unit.update(
+            type=config.get("type"),
+            name=config.get("name") or unit_id,
+            min=limits.get("min"),
+            max=limits.get("max"),
+            step=caps.get("set_temperature_delta") or 1,
+            settable=bool(config.get("setTemperature")),
+        )
+        self._apply_heating_unit_values(unit_id, values)
+
+    @callback
+    def _apply_heating_unit_values(self, unit_id: str, values: Any) -> None:
+        """Take over { current, target, rapidheating: { level } }."""
+        unit = self.heating_units.get(unit_id)
+        if unit is None or not isinstance(values, dict):
+            return
+        for field in ("current", "target"):
+            if isinstance(values.get(field), (int, float)):
+                unit[field] = values[field]
+        rapid = values.get("rapidheating")
+        if isinstance(rapid, dict) and rapid.get("level") is not None:
+            unit["rapidheating"] = int(rapid["level"])
+
+    def heating_unit_present(self, unit_id: str) -> bool:
+        """The pool is listed when configured; only use it with a reading."""
+        unit = self.heating_units.get(unit_id) or {}
+        if unit.get("type") == POOL_TYPE:
+            return bool(unit.get("current"))
+        return True
 
     # ---------------- Live (Socket.IO) ----------------
     async def _handle_live_values(self, values: dict[str, Any]) -> None:
+        self._last_bundle = time.monotonic()
         merged: dict[str, Any] = dict(self.data or {})
         merged.update(values)
         if MODE_KEY in values:
@@ -235,8 +368,11 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._async_push_data(merged)
 
     @callback
-    def _handle_api_response(self, route: str, body: Any) -> None:
+    def _handle_api_response(self, route: str, body: Any, path: str = "") -> None:
         """Take over API responses the UHI broadcasts to all clients."""
+        if route.startswith("heatingunit") or route == "data.rapidheating":
+            self._handle_heating_unit_response(route, body, path)
+            return
         if route.startswith("operationmode"):
             # GET/PUT return the mode object, /list a list (ignored).
             if isinstance(body, dict) and "id" in body:
@@ -259,6 +395,27 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         self._notify_new_keys(values.keys())
         self._async_push_data(values)
+
+    @callback
+    def _handle_heating_unit_response(self, route: str, body: Any, path: str) -> None:
+        parts = path_parts(path)
+        unit_id = parts[1] if len(parts) >= 3 and parts[0] == "heatingunit" else None
+        if route == "heatingunit.config" and isinstance(body, list):
+            for config in body:
+                if isinstance(config, dict) and config.get("id") in self.heating_units:
+                    self._apply_heating_unit_values(
+                        str(config["id"]), config.get("variableValues")
+                    )
+        elif route == "heatingunit.temperature" and unit_id:
+            self._apply_heating_unit_values(unit_id, body)
+        elif route.endswith("rapidheating") and isinstance(body, dict):
+            if body.get("id") is not None and body.get("level") is not None:
+                self._apply_heating_unit_values(
+                    str(body["id"]), {"rapidheating": {"level": body["level"]}}
+                )
+        else:
+            return
+        self.async_update_listeners()
 
     # ---------------- Dynamic keys ----------------
     @callback
@@ -353,6 +510,63 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 translation_domain=DOMAIN, translation_key="automatic_timed_mode"
             )
         await self._async_put_mode(self.current_mode_id, enabled)
+
+    async def async_set_mode_limit(self, field: str, value: float) -> None:
+        """Set a limit of the automatic mode switching."""
+        if not self.is_automatic:
+            # The UHI only applies the limits together with automatic mode.
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="automatic_required"
+            )
+        if self.current_mode_id is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="mode_unknown"
+            )
+        if self.current_mode_id in (MODE_HOLIDAY, MODE_PARTY):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="automatic_timed_mode"
+            )
+        limits = {**self.mode_limits, field: value}
+        await self._async_put_mode(self.current_mode_id, True, **limits)
+        self.mode_limits[field] = value
+        self.async_update_listeners()
+
+    async def async_set_heating_unit_target(self, unit_id: str, value: float) -> None:
+        if unit_id == HOT_WATER_UNIT:
+            # Same rule as the UHI app: not below the hot water minimum.
+            minimum = (self.data or {}).get(WW_MIN_KEY)
+            try:
+                if minimum is not None and value < float(minimum):
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="ww_below_minimum",
+                        translation_placeholders={"minimum": str(minimum)},
+                    )
+            except (TypeError, ValueError):
+                pass
+        try:
+            result = await self.client.set_heating_unit_target(unit_id, value)
+        except UhiApiError as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="write_failed",
+                translation_placeholders={"key": unit_id, "error": str(exc)},
+            ) from exc
+        self._apply_heating_unit_values(unit_id, {"target": value, **result})
+        self.async_update_listeners()
+
+    async def async_set_rapid_heating(self, unit_id: str, level: int) -> None:
+        try:
+            result = await self.client.set_rapid_heating(unit_id, level)
+        except UhiApiError as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="write_failed",
+                translation_placeholders={"key": unit_id, "error": str(exc)},
+            ) from exc
+        confirmed = result.get("level", level)
+        self._apply_heating_unit_values(unit_id, {"rapidheating": {"level": confirmed}})
+        self.async_update_listeners()
 
     async def _async_put_mode(
         self, mode_id: int, is_automatic: bool, **extra: Any

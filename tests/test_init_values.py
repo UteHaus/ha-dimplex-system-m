@@ -1,13 +1,12 @@
 """Tests for dimplex_uhi (UHI 4.3.4 on the device; 3.x formats as fallback)."""
 
 import json
+import time
 from unittest.mock import AsyncMock, PropertyMock, patch
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.restore_state import DATA_RESTORE_STATE, StoredState
-from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -18,6 +17,7 @@ import custom_components.dimplex_uhi.api  # noqa: F401
 from custom_components.dimplex_uhi.api import (
     UhiApiClient,
     UhiApiError,
+    encode_body,
     parse_api_response,
 )
 
@@ -38,8 +38,56 @@ GROUPS = {
             "definition": {"physicalUnit": "UNIT_DEG_C"},
         },
         {"key": "WPIO2_r_ECT_AC_Inp_Power", "value": "1000", "definition": {}},
-    ]
+    ],
+    "MISC": [
+        {
+            "key": "P_WW_MIN_TEMP",
+            "value": 40,
+            "definition": {"physicalUnit": "UNIT_DEG_C"},
+        }
+    ],
+    "INPUTS": [
+        {"key": "SmartGrid_Niedrig", "value": 0, "definition": {}},
+        {"key": "SmartGrid_Hoch", "value": 0, "definition": {}},
+        {"key": "SmartGrid_Normal", "value": 1, "definition": {}},
+        {"key": "SmartGrid_Problem", "value": 0, "definition": {}},
+    ],
 }
+# /api/heatingunit/config as reported by the UHI 4.3.4 on the heat pump.
+HEATING_UNITS = [
+    {
+        "type": "HK_VERSCHIEBUNG",
+        "setTemperature": True,
+        "targetTemperature": {"min": -19, "max": 19},
+        "id": "HK1",
+        "variableValues": {
+            "current": 23.5,
+            "target": 1,
+            "offset": 0,
+            "rapidheating": {"level": 0},
+        },
+        "capabilities": {"set_temperature_delta": 1},
+        "name": "HK1",
+    },
+    {
+        "type": "WARMWASSER",
+        "setTemperature": True,
+        "targetTemperature": {"min": 30, "max": 60},
+        "id": "WW",
+        "variableValues": {"current": 48.9, "target": 50, "offset": 0},
+        "capabilities": {},
+        "name": "WW",
+    },
+    # Pool configured in the WPM but without a reading: not created.
+    {
+        "type": "SCHWIMMBAD",
+        "setTemperature": True,
+        "targetTemperature": {"min": 10, "max": 35},
+        "id": "SW",
+        "capabilities": {},
+        "name": "SW",
+    },
+]
 # UHI 3.1.4: no MAC; mode ids are strings; GET operationmode is not wrapped.
 VERSION = {"uhi": {"version": "3.1.4"}, "heatpump": "x"}
 MODES = [
@@ -47,7 +95,15 @@ MODES = [
     {"id": "1", "name": "Winter"},
     {"id": "3", "name": "Party"},
 ]
-MODE = {"id": 1, "is_automatic_mode": 1, "name": "Winter", "dateStart": None}
+MODE = {
+    "id": 1,
+    "is_automatic_mode": 1,
+    "name": "Winter",
+    "dateStart": None,
+    "limitTempCooling": 25,
+    "limitTempHeating": 18,
+    "delayTimeHours": 3,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +128,18 @@ def api():
             side_effect=lambda key, value: {"key": key, "value": float(value)}
         ),
         "get_function_data_groups": AsyncMock(return_value=GROUPS),
+        "get_heating_units": AsyncMock(
+            side_effect=lambda: json.loads(json.dumps(HEATING_UNITS))
+        ),
+        "get_heating_unit_temperature": AsyncMock(
+            return_value={"current": 0, "target": 25, "offset": 0}
+        ),
+        "set_heating_unit_target": AsyncMock(
+            side_effect=lambda unit_id, target: {"current": 20, "target": target}
+        ),
+        "set_rapid_heating": AsyncMock(
+            side_effect=lambda unit_id, level: {"level": level, "id": unit_id}
+        ),
         "connect_socket": AsyncMock(),
         "disconnect_socket": AsyncMock(),
     }
@@ -83,11 +151,12 @@ def api():
         p.stop()
 
 
-async def _setup(hass):
+async def _setup(hass, options=None):
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=SERIAL,
         data={"name": "WP", "host": "uhi", "port": 8080, "language": "de"},
+        options=options or {},
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -149,56 +218,152 @@ async def test_automatic_switch(hass: HomeAssistant, api) -> None:
         )
 
 
-async def test_restore_live_and_write(hass: HomeAssistant, api) -> None:
+async def test_commissioning_parameters_read_only(hass: HomeAssistant, api) -> None:
+    """No read endpoint: restored, updated by pushes, never writable."""
     ent_reg = er.async_get(hass)
     ent_reg.async_get_or_create(
-        "number", DOMAIN, f"{SERIAL}_P_HK1_WK", suggested_object_id="wk"
-    )
-    ent_reg.async_get_or_create(
-        "select", DOMAIN, f"{SERIAL}_P_EVS", suggested_object_id="evs"
+        "sensor", DOMAIN, f"{SERIAL}_P_HK1_END", suggested_object_id="hk1_end"
     )
     mock_restore_cache_with_extra_data(
         hass,
         [
             (
-                State("number.wk", "12"),
-                {
-                    "native_value": 12.0,
-                    "native_min_value": -19,
-                    "native_max_value": 38,
-                    "native_step": 1,
-                    "native_unit_of_measurement": None,
-                },
+                State("sensor.hk1_end", "45"),
+                {"native_value": 45, "native_unit_of_measurement": "°C"},
             )
         ],
     )
-    hass.data[DATA_RESTORE_STATE].last_states["select.evs"] = StoredState(
-        State("select.evs", "Dauerhaft"), None, dt_util.utcnow()
-    )
     _, coord = await _setup(hass)
-    assert float(hass.states.get("number.wk").state) == 12
-    assert hass.states.get("select.evs").state == "Dauerhaft"
+    end = hass.states.get("sensor.hk1_end")
+    assert end.state == "45"
+    assert "Inbetriebnahme" in end.attributes["info"]
+    assert ent_reg.async_get_entity_id("number", DOMAIN, f"{SERIAL}_P_HK1_END") is None
+    assert ent_reg.async_get_entity_id("select", DOMAIN, f"{SERIAL}_P_EVS") is None
 
-    await coord._handle_live_values({"BA_aktiv": 0, "P_HK1_WK": 20})
+    evs = _state(hass, "P_EVS")
+    assert evs.state == "unknown"
+    await coord._handle_live_values({"P_EVS": 2, "P_HK1_END": 48})
     await hass.async_block_till_done()
-    assert _state(hass, "BA_aktiv").state == "Sommer"
-    assert float(hass.states.get("number.wk").state) == 20
-
-    await hass.services.async_call(
-        "number", "set_value", {"entity_id": "number.wk", "value": 5}, blocking=True
-    )
-    api["set_function_data"].assert_awaited_with("P_HK1_WK", 5)
-    assert float(hass.states.get("number.wk").state) == 5
-
-    api["set_function_data"].side_effect = UhiApiError("HTTP 500")
-    with pytest.raises(HomeAssistantError):
-        await hass.services.async_call(
-            "number", "set_value", {"entity_id": "number.wk", "value": 7}, blocking=True
-        )
-    assert float(hass.states.get("number.wk").state) == 5
+    assert _state(hass, "P_EVS").state == "Dauerhaft"
+    assert hass.states.get("sensor.hk1_end").state == "48"
 
     result = await hass.config_entries.options.async_init(coord.entry.entry_id)
     assert result["type"] == "form"
+
+
+async def test_heating_units(hass: HomeAssistant, api) -> None:
+    await _setup(hass)
+    hk1 = _state(hass, "heatingunit_HK1")
+    assert hk1.state == "1"
+    assert (hk1.attributes["min"], hk1.attributes["max"]) == (-19, 19)
+    assert hk1.attributes["unit_of_measurement"] == "K"
+    ww = _state(hass, "heatingunit_WW")
+    assert ww.state == "50"
+    assert (ww.attributes["min"], ww.attributes["max"]) == (30, 60)
+    ent_reg = er.async_get(hass)
+    assert (
+        ent_reg.async_get_entity_id("number", DOMAIN, f"{SERIAL}_heatingunit_SW")
+        is None
+    )
+
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": hk1.entity_id, "value": 3}, blocking=True
+    )
+    api["set_heating_unit_target"].assert_awaited_with("HK1", 3)
+    assert hass.states.get(hk1.entity_id).state == "3"
+
+    # Not below the hot water minimum (P_WW_MIN_TEMP = 40), like the UHI app.
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": ww.entity_id, "value": 35},
+            blocking=True,
+        )
+    api["set_heating_unit_target"].side_effect = UhiApiError("HTTP 500")
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": ww.entity_id, "value": 55},
+            blocking=True,
+        )
+    assert hass.states.get(ww.entity_id).state == "50"
+
+
+async def test_rapid_heating(hass: HomeAssistant, api) -> None:
+    await _setup(hass)
+    rapid = _state(hass, "rapidheating_HK1")
+    assert rapid.state == "Aus"
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": rapid.entity_id, "option": "Stufe 2"},
+        blocking=True,
+    )
+    api["set_rapid_heating"].assert_awaited_with("HK1", 2)
+    assert hass.states.get(rapid.entity_id).state == "Stufe 2"
+
+
+async def test_mode_limits(hass: HomeAssistant, api) -> None:
+    _, coord = await _setup(hass)
+    heating = _state(hass, "mode_limitTempHeating")
+    assert heating.state == "18"
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": heating.entity_id, "value": 16},
+        blocking=True,
+    )
+    args, kwargs = api["set_operation_mode"].await_args
+    assert args == (1, True)
+    assert kwargs == {
+        "limitTempHeating": 16,
+        "limitTempCooling": 25,
+        "delayTimeHours": 3,
+    }
+    assert hass.states.get(heating.entity_id).state == "16"
+
+    coord.is_automatic = False
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": heating.entity_id, "value": 15},
+            blocking=True,
+        )
+
+
+async def test_smart_grid_state(hass: HomeAssistant, api) -> None:
+    _, coord = await _setup(hass)
+    assert _state(hass, "smart_grid").state == "Normal"
+    await coord._handle_live_values({"SmartGrid_Normal": 0, "SmartGrid_Hoch": 1})
+    await hass.async_block_till_done()
+    assert _state(hass, "smart_grid").state == "Hoch"
+
+
+async def test_no_smart_grid_control(hass: HomeAssistant, api) -> None:
+    """The UHI cannot write the Smart Grid flags: status only, no control."""
+    await _setup(hass)
+    ent_reg = er.async_get(hass)
+    assert (
+        ent_reg.async_get_entity_id("select", DOMAIN, f"{SERIAL}_smart_grid_request")
+        is None
+    )
+
+
+async def test_ww_min_write(hass: HomeAssistant, api) -> None:
+    await _setup(hass)
+    ww_min = _state(hass, "P_WW_MIN_TEMP")
+    assert ww_min.state == "40"
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": ww_min.entity_id, "value": 45},
+        blocking=True,
+    )
+    api["set_function_data"].assert_awaited_with("P_WW_MIN_TEMP", 45)
+    assert hass.states.get(ww_min.entity_id).state == "45"
 
 
 async def test_socket_retry_and_refresh_on_connect(hass: HomeAssistant, api) -> None:
@@ -224,11 +389,73 @@ async def test_connected_socket_skips_snapshot(hass: HomeAssistant, api) -> None
     with patch.object(
         UhiApiClient, "socket_connected", new_callable=PropertyMock, return_value=True
     ):
+        await coord._handle_live_values({"E_Aussen_T": "5.6"})
         await coord.async_refresh()
         assert api["get_function_data_groups"].await_count == calls
         coord._last_snapshot -= 601
         await coord.async_refresh()
         assert api["get_function_data_groups"].await_count == calls + 1
+
+
+async def test_silent_socket_polls_again(hass: HomeAssistant, api) -> None:
+    """Connected but no change bundles (e.g. event renamed): poll as usual."""
+    _, coord = await _setup(hass)
+    calls = api["get_function_data_groups"].await_count
+    with patch.object(
+        UhiApiClient, "socket_connected", new_callable=PropertyMock, return_value=True
+    ):
+        coord._last_bundle = time.monotonic() - 301
+        await coord.async_refresh()
+    assert api["get_function_data_groups"].await_count == calls + 1
+
+
+async def test_unknown_group_is_skipped(hass: HomeAssistant, api) -> None:
+    """One group the UHI rejects must not take the whole integration down."""
+
+    async def groups(names):
+        if len(names) > 1 or names == ["MISC"]:
+            raise UhiApiError("HTTP 500")
+        return {names[0]: GROUPS["GROUP_01"] if names[0] == "GROUP_01" else []}
+
+    api["get_function_data_groups"].side_effect = groups
+    _, coord = await _setup(hass)
+    assert coord.last_update_success
+    assert coord.data["E_Aussen_T"] == "5.5"
+    assert "MISC" in coord._skipped_groups
+
+    api["get_function_data_groups"].reset_mock()
+    await coord.async_refresh()
+    first_call = api["get_function_data_groups"].await_args_list[0].args[0]
+    assert "MISC" not in first_call and "GROUP_01" in first_call
+
+
+async def test_unreachable_uhi_skips_no_group(hass: HomeAssistant, api) -> None:
+    _, coord = await _setup(hass)
+    api["get_function_data_groups"].side_effect = UhiApiError("timeout")
+    await coord.async_refresh()
+    assert not coord.last_update_success
+    assert coord._skipped_groups == {}
+
+
+async def test_number_limits_prefer_uhi(hass: HomeAssistant, api) -> None:
+    _, coord = await _setup(hass)
+    number = _state(hass, "P_WW_MIN_TEMP")
+    assert number.attributes["min"] == 10  # hard-coded spec
+    coord._handle_api_response(
+        "functiondata.groups",
+        {
+            "MISC": [
+                {
+                    "key": "P_WW_MIN_TEMP",
+                    "value": 40,
+                    "definition": {"numberMin": 35, "numberMax": 60},
+                }
+            ]
+        },
+    )
+    await hass.async_block_till_done()
+    number = hass.states.get(number.entity_id)
+    assert (number.attributes["min"], number.attributes["max"]) == (35, 60)
 
 
 def _api_response(body, path="", x_route=None, status=200):
@@ -240,35 +467,56 @@ def _api_response(body, path="", x_route=None, status=200):
     }
 
 
+def test_encode_body_matches_json_stringify() -> None:
+    """Same bytes as JSON.stringify, else the UHI's internal proxy hangs."""
+    assert encode_body({"value": 10}) == b'{"value":10}'
+    assert encode_body({"value": 45.0}) == b'{"value":45}'
+    assert encode_body({"value": 45.5}) == b'{"value":45.5}'
+    assert encode_body({"id": 1, "name": "Wärme"}) == '{"id":1,"name":"Wärme"}'.encode()
+
+
 def test_parse_api_response() -> None:
     body = {"key": "P_EVS", "value": 2.0}
     assert parse_api_response(_api_response(body, x_route="functiondata.key")) == (
         "functiondata.key",
         body,
+        "",
     )
-    assert parse_api_response(
-        _api_response(body, path="/api/v2/functiondata/key/P_EVS")
-    ) == ("functiondata.key", body)
-    assert parse_api_response(_api_response({}, path="/api/operationmode")) == (
-        "operationmode",
-        {},
+    path = "/api/v2/functiondata/key/P_EVS"
+    assert parse_api_response(_api_response(body, path=path)) == (
+        "functiondata.key",
+        body,
+        path,
+    )
+    path = "/api/heatingunit/HK1/temperature"
+    assert parse_api_response(_api_response({"target": 2}, path=path)) == (
+        "heatingunit.temperature",
+        {"target": 2},
+        path,
     )
     assert parse_api_response(_api_response(body, status=500)) is None
     assert parse_api_response("garbage") is None
 
 
 async def test_api_response_pushes(hass: HomeAssistant, api) -> None:
-    ent_reg = er.async_get(hass)
-    ent_reg.async_get_or_create(
-        "select", DOMAIN, f"{SERIAL}_P_EVS", suggested_object_id="evs"
-    )
     _, coord = await _setup(hass)
     handle = coord._handle_api_response
 
     # Write on the touch display (not part of the change bundles).
-    handle("functiondata.key", {"key": "P_EVS", "value": 2.0})
+    handle("functiondata.key", {"key": "P_WW_MIN_TEMP", "value": 42.0})
     await hass.async_block_till_done()
-    assert hass.states.get("select.evs").state == "Dauerhaft"
+    assert float(_state(hass, "P_WW_MIN_TEMP").state) == 42
+
+    # Heating unit setpoint and rapid heating changed in the UHI app.
+    handle(
+        "heatingunit.temperature",
+        {"current": 23, "target": -2, "offset": 0},
+        "/api/v2/heatingunit/HK1/temperature",
+    )
+    handle("heatingunit.rapidheating", {"level": 3, "id": "HK1"})
+    await hass.async_block_till_done()
+    assert _state(hass, "heatingunit_HK1").state == "-2"
+    assert _state(hass, "rapidheating_HK1").state == "Stufe 3"
 
     # Re-broadcast group snapshot.
     handle(

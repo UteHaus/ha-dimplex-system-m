@@ -10,6 +10,7 @@ Uses only existing endpoints/socket - NO changes are made to UHI.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import logging
 
 import requests
@@ -18,6 +19,30 @@ import socketio
 from .config import Config
 
 logger = logging.getLogger("uhi-ha-bridge.uhi")
+
+
+def _js_value(value):
+    """Integral floats as int, like JavaScript prints them (10.0 -> 10)."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _js_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_js_value(v) for v in value]
+    return value
+
+
+def encode_body(payload: dict) -> bytes:
+    """Serialize a request body exactly like JSON.stringify.
+
+    The UHI re-sends every API request internally with the original
+    Content-Length but a body re-serialized by JSON.stringify. If the lengths
+    differ (Python adds spaces after ':' and ','), the internal request waits
+    for missing bytes and the UHI answers HTTP 502 after 60 s.
+    """
+    return json.dumps(
+        _js_value(payload), separators=(",", ":"), ensure_ascii=False
+    ).encode()
 
 
 class UhiClient:
@@ -95,21 +120,22 @@ class UhiClient:
         resp.raise_for_status()
         return resp.json()
 
-    def set_operation_mode(self, mode_id: int) -> dict:
+    def _put(self, path: str, payload: dict) -> dict:
         resp = self._session.put(
-            self._url("/api/operationmode"), json={"id": mode_id}, timeout=10
+            self._url(path),
+            data=encode_body(payload),
+            headers={"Content-Type": "application/json"},
+            # Writes run a script on the UHI; its proxy gives up after 60 s.
+            timeout=60,
         )
         resp.raise_for_status()
         return resp.json()
 
+    def set_operation_mode(self, mode_id: int) -> dict:
+        return self._put("/api/operationmode", {"id": mode_id})
+
     def set_function_data(self, key: str, value) -> dict:
-        resp = self._session.put(
-            self._url(f"/api/functiondata/key/{key}"),
-            json={"value": value},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return self._put(f"/api/functiondata/key/{key}", {"value": value})
 
     def get_function_data_groups(self, groups: list[str]) -> dict:
         """Read the current values of multiple groups at once.

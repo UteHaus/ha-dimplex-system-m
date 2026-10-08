@@ -1,19 +1,24 @@
-"""Select platform: operation mode and P_EVS."""
+"""Select platform: operation mode and rapid heating."""
 
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
-from .entity import DimplexUhiEntity
-from .models import PLATFORM_SELECT, WRITABLE_SPECS, WritableSpec, coerce_number
-from .names import resolve_option_label
+from .entity import DimplexUhiEntity, build_device_info
+from .models import (
+    PLATFORM_SELECT,
+    WRITABLE_SPECS,
+    WritableSpec,
+)
+from .names import label
+
+RAPID_HEATING_LEVELS = (0, 1, 2, 3)
 
 
 async def async_setup_entry(
@@ -22,14 +27,16 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SelectEntity] = []
-    for spec in WRITABLE_SPECS.values():
-        if spec.platform != PLATFORM_SELECT:
-            continue
-        if spec.write_via == "operationmode":
-            entities.append(DimplexUhiModeSelect(coordinator, spec))
-        else:
-            entities.append(DimplexUhiOptionSelect(coordinator, spec))
+    entities: list[SelectEntity] = [
+        DimplexUhiModeSelect(coordinator, spec)
+        for spec in WRITABLE_SPECS.values()
+        if spec.platform == PLATFORM_SELECT and spec.write_via == "operationmode"
+    ]
+    entities.extend(
+        DimplexUhiRapidHeatingSelect(coordinator, unit_id)
+        for unit_id, unit in coordinator.heating_units.items()
+        if "rapidheating" in unit
+    )
     async_add_entities(entities)
 
 
@@ -63,60 +70,47 @@ class DimplexUhiModeSelect(DimplexUhiEntity, SelectEntity):
         await self.coordinator.async_set_operation_mode(mode_id)
 
 
-class DimplexUhiOptionSelect(DimplexUhiEntity, SelectEntity, RestoreEntity):
-    """Selection with a fixed value list (e.g. P_EVS).
+class DimplexUhiRapidHeatingSelect(
+    CoordinatorEntity[DimplexUhiCoordinator], SelectEntity
+):
+    """Rapid heating level (0 = off .. 3) of a heating circuit."""
 
-    Not readable via REST; the last known option is restored until the
-    socket reports the value.
-    """
+    _attr_has_entity_name = False
+    _attr_icon = "mdi:radiator"
 
-    def __init__(self, coordinator: DimplexUhiCoordinator, spec: WritableSpec) -> None:
-        super().__init__(coordinator, spec.key)
-        self._spec = spec
-        self._optimistic: str | None = None
-        self._label_to_value = {
-            resolve_option_label(spec.key, value, self._language): value
-            for value in spec.option_values
+    def __init__(self, coordinator: DimplexUhiCoordinator, unit_id: str) -> None:
+        super().__init__(coordinator)
+        self._unit_id = unit_id
+        language = coordinator.language
+        unit_name = coordinator.heating_units[unit_id].get("name") or unit_id
+        self._attr_unique_id = f"{coordinator.identifier}_rapidheating_{unit_id}"
+        self._attr_device_info = build_device_info(coordinator)
+        self._attr_name = label(
+            language,
+            f"{unit_name} Schnellaufheizung",
+            f"{unit_name} rapid heating",
+        )
+        self._level_to_option = {
+            level: label(language, "Aus", "Off")
+            if level == 0
+            else label(language, f"Stufe {level}", f"Level {level}")
+            for level in RAPID_HEATING_LEVELS
         }
-        self._value_to_label = {v: k for k, v in self._label_to_value.items()}
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        if last is None or last.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            return
-        # Labels depend on the language; fall back to the raw value.
-        value = self._label_to_value.get(last.state)
-        if value is None and last.state in self._value_to_label:
-            value = last.state
-        if value is not None:
-            self._optimistic = value
+        self._option_to_level = {v: k for k, v in self._level_to_option.items()}
+        self._attr_options = list(self._option_to_level)
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    @property
-    def options(self) -> list[str]:
-        return list(self._label_to_value)
+        return self.coordinator.last_update_success and (
+            "rapidheating" in self.coordinator.heating_units.get(self._unit_id, {})
+        )
 
     @property
     def current_option(self) -> str | None:
-        data = self.coordinator.data or {}
-        if self._key in data:
-            raw = coerce_number(data[self._key])
-            value = str(int(raw)) if isinstance(raw, (int, float)) else str(raw)
-            return self._value_to_label.get(value)
-        if self._optimistic is not None:
-            return self._value_to_label.get(self._optimistic)
-        return None
+        unit = self.coordinator.heating_units.get(self._unit_id, {})
+        return self._level_to_option.get(unit.get("rapidheating"))
 
     async def async_select_option(self, option: str) -> None:
-        value = self._label_to_value.get(option)
-        if value is None:
-            return
-        confirmed = coerce_number(
-            await self.coordinator.async_set_function_data(self._key, int(value))
+        await self.coordinator.async_set_rapid_heating(
+            self._unit_id, self._option_to_level[option]
         )
-        self._optimistic = value
-        self.coordinator.apply_local_value(self._key, confirmed)
