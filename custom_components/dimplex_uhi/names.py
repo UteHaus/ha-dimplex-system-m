@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from functools import cache, lru_cache
 import json
 import logging
-import re
-from functools import lru_cache
 from pathlib import Path
+import re
 
 from .const import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 
@@ -15,7 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).parent / "data"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _load_names(language: str) -> dict[str, str]:
     path = _DATA_DIR / f"names_{language}.json"
     try:
@@ -43,6 +43,12 @@ def normalize_language(language: str | None) -> str:
     return DEFAULT_LANGUAGE
 
 
+def preload(language: str) -> None:
+    """Load the data files (blocking I/O; run in the executor at setup)."""
+    _load_names(normalize_language(language))
+    _load_device_keys()
+
+
 def device_keys() -> dict[str, dict]:
     """Bundled deviceKeys metadata (fallback source)."""
     return _load_device_keys()
@@ -62,6 +68,11 @@ def resolve_name(key: str, language: str, meta: dict | None = None) -> str:
     if meta and meta.get("desc") and meta["desc"] != key:
         return meta["desc"]
     return _humanize(key)
+
+
+def label(language: str, german: str, english: str) -> str:
+    """Pick the German or English text for names the UHI does not provide."""
+    return german if normalize_language(language) == "de" else english
 
 
 def resolve_option_label(key: str, value: str, language: str) -> str:

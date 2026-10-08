@@ -14,6 +14,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -22,12 +23,23 @@ from .coordinator import DimplexUhiCoordinator
 from .discovery import setup_dynamic_entities
 from .entity import DimplexUhiEntity, build_device_info
 from .models import (
+    COMMISSIONING_KEYS,
     ENERGY_POWER_KEY,
     PLATFORM_SENSOR,
+    SMART_GRID_KEYS,
     coerce_number,
     resolve_sensor_classes,
     resolve_unit_for_key,
+    smart_grid_state,
 )
+from .names import label, resolve_option_label
+
+_SMART_GRID_LABELS: dict[str, tuple[str, str]] = {
+    "low": ("Niedrig", "Low"),
+    "normal": ("Normal", "Normal"),
+    "high": ("Hoch", "High"),
+    "problem": ("Problem", "Problem"),
+}
 
 
 async def async_setup_entry(
@@ -39,7 +51,16 @@ async def async_setup_entry(
     setup_dynamic_entities(
         coordinator, PLATFORM_SENSOR, DimplexUhiSensor, async_add_entities
     )
-    async_add_entities([DimplexUhiEnergySensor(coordinator)])
+    async_add_entities(
+        [
+            DimplexUhiEnergySensor(coordinator),
+            DimplexUhiSmartGridSensor(coordinator),
+            *(
+                DimplexUhiCommissioningSensor(coordinator, key)
+                for key in COMMISSIONING_KEYS
+            ),
+        ]
+    )
 
 
 class DimplexUhiSensor(DimplexUhiEntity, SensorEntity):
@@ -115,6 +136,12 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
                 self._energy_kwh = float(last.native_value)
             except (TypeError, ValueError):
                 self._energy_kwh = 0.0
+        # Start integrating from the snapshot that is already loaded.
+        try:
+            self._last_power = float((self.coordinator.data or {})[ENERGY_POWER_KEY])
+        except (KeyError, TypeError, ValueError):
+            return
+        self._last_ts = time.monotonic()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -129,9 +156,10 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
             dt = now - self._last_ts
             # Plausibility: only integrate sensible intervals.
             if 0 < dt < 3600:
-                avg_power = (power + self._last_power) / 2.0
+                # The UHI only pushes changes, so the previous value held
+                # for the whole interval (left Riemann sum, not trapezoid).
                 # W * s -> kWh
-                self._energy_kwh += avg_power * dt / 3_600_000.0
+                self._energy_kwh += self._last_power * dt / 3_600_000.0
         self._last_power = power
         self._last_ts = now
         super()._handle_coordinator_update()
@@ -143,3 +171,89 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
     @property
     def native_value(self) -> float:
         return round(self._energy_kwh, 6)
+
+
+class DimplexUhiCommissioningSensor(DimplexUhiEntity, RestoreSensor):
+    """Commissioning (EasyOn) parameter, shown read-only.
+
+    It is not adjustable in the UHI user interface and has no read endpoint:
+    the value arrives only when it changes; the last one is restored.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DimplexUhiCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_entity_registry_enabled_default = True
+        self._restored: Any = None
+        self._option_labels = resolve_option_label(key, "1", self._language) != "1"
+        unit = resolve_unit_for_key(key, self._definition, self._meta)
+        if unit and not self._option_labels:
+            self._attr_native_unit_of_measurement = unit
+            device_class, _ = resolve_sensor_classes(unit)
+            if device_class:
+                self._attr_device_class = device_class
+        self._attr_extra_state_attributes = {
+            "info": label(
+                self._language,
+                "Inbetriebnahme-Parameter (nur lesbar, in der UHI über den "
+                "EasyOn-Assistenten einstellbar). Der Wert wird erst angezeigt, "
+                "wenn ihn die UHI meldet.",
+                "Commissioning parameter (read-only, set via the EasyOn wizard "
+                "of the UHI). The value is shown once the UHI reports it.",
+            )
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None:
+            self._restored = last.native_value
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def native_value(self) -> Any:
+        data = self.coordinator.data or {}
+        if self._key not in data:
+            return self._restored
+        value = coerce_number(data[self._key])
+        if self._option_labels and isinstance(value, (int, float)):
+            return resolve_option_label(self._key, str(int(value)), self._language)
+        return value
+
+
+class DimplexUhiSmartGridSensor(
+    CoordinatorEntity[DimplexUhiCoordinator], SensorEntity
+):
+    """Smart Grid (SG Ready) state as reported by the WPM inputs."""
+
+    _attr_has_entity_name = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_icon = "mdi:transmission-tower"
+
+    def __init__(self, coordinator: DimplexUhiCoordinator) -> None:
+        super().__init__(coordinator)
+        language = coordinator.language
+        self._attr_unique_id = f"{coordinator.identifier}_smart_grid"
+        self._attr_device_info = build_device_info(coordinator)
+        self._attr_name = "Smart Grid"
+        self._labels = {
+            state: label(language, german, english)
+            for state, (german, english) in _SMART_GRID_LABELS.items()
+        }
+        self._attr_options = list(self._labels.values())
+
+    @property
+    def available(self) -> bool:
+        data = self.coordinator.data or {}
+        return self.coordinator.last_update_success and any(
+            key in data for key, _ in SMART_GRID_KEYS
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        state = smart_grid_state(self.coordinator.data or {})
+        return None if state is None else self._labels[state]

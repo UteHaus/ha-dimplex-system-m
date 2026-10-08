@@ -133,7 +133,9 @@ class Bridge:
                 if key is not None:
                     values[key] = item.get("value")
         if values:
-            logger.info("Initial snapshot: %d values from %d groups", len(values), len(data))
+            logger.info(
+                "Initial snapshot: %d values from %d groups", len(values), len(data)
+            )
             self._handle_operationdata(values)
         else:
             logger.warning("Initial snapshot returned no values")

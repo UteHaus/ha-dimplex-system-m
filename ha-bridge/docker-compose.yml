@@ -33,7 +33,7 @@ services:
     volumes:
       - ./homeassistant:/config
       # Native Custom Component (HACS-kompatibel) zum Testen einbinden.
-      - ../ha-integration/custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi
+      - ../custom_components/dimplex_uhi:/config/custom_components/dimplex_uhi
     environment:
       - TZ=Europe/Berlin
 
@@ -68,7 +68,7 @@ services:
     volumes:
       - ../../uhi/external/communicator/config/deviceKeys.json:/data/deviceKeys.json:ro
       # Lesbare Namen (DE) aus der Integration als Namensquelle der Bridge.
-      - ../ha-integration/custom_components/dimplex_uhi/data/names_de.json:/data/names_de.json:ro
+      - ../custom_components/dimplex_uhi/data/names_de.json:/data/names_de.json:ro
     environment:
       - MQTT_URL=mqtt://mosquitto:1883
       # UHI ueber den SSH-Tunnel-Container erreichen.

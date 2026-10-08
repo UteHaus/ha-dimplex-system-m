@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .const import UNIT_MAP
@@ -26,102 +26,64 @@ class WritableSpec:
     step: float | None = None
     unit: str | None = None
     device_class: str | None = None
-    # For select with a fixed value list: raw values (as str) in order.
-    option_values: tuple[str, ...] = field(default_factory=tuple)
+    # (German, English) name where the UHI name is ambiguous.
+    name: tuple[str, str] | None = None
 
 
-# Extended, confirmed write list.
+# Only what the UHI user interface lets an operator adjust. Heating-unit
+# setpoints (heating circuits, hot water, pool), rapid heating and the
+# automatic mode limits are created from the heating unit / operation mode
+# APIs instead (see number.py, select.py).
 WRITABLE_SPECS: dict[str, WritableSpec] = {
     "BA_aktiv": WritableSpec(
         key="BA_aktiv",
         platform=PLATFORM_SELECT,
         write_via="operationmode",
     ),
-    "P_EVS": WritableSpec(
-        key="P_EVS",
-        platform=PLATFORM_SELECT,
-        write_via="functiondata",
-        option_values=("1", "2", "3"),
-    ),
-    "P_WW_SOLL": WritableSpec(
-        key="P_WW_SOLL",
+    "P_WW_MIN_TEMP": WritableSpec(
+        key="P_WW_MIN_TEMP",
         platform=PLATFORM_NUMBER,
         write_via="functiondata",
-        min=30,
-        max=85,
-        step=1,
-        unit="°C",
-        device_class="temperature",
-    ),
-    "P_WW_SOLLAB": WritableSpec(
-        key="P_WW_SOLLAB",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=30,
-        max=85,
-        step=1,
-        unit="°C",
-        device_class="temperature",
-    ),
-    "P_HK1_WK": WritableSpec(
-        key="P_HK1_WK",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=-19,
-        max=38,
-        step=1,
-    ),
-    "P_HK1_END": WritableSpec(
-        key="P_HK1_END",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=20,
-        max=70,
-        step=1,
-        unit="°C",
-        device_class="temperature",
-    ),
-    "P_HK1_MAX": WritableSpec(
-        key="P_HK1_MAX",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=25,
-        max=70,
-        step=1,
-        unit="°C",
-        device_class="temperature",
-    ),
-    "P_HK1_FWR_SOLL": WritableSpec(
-        key="P_HK1_FWR_SOLL",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=0,
+        min=10,
         max=60,
         step=1,
         unit="°C",
         device_class="temperature",
-    ),
-    "P_HK1_RT_GT": WritableSpec(
-        key="P_HK1_RT_GT",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=15,
-        max=30,
-        step=1,
-        unit="°C",
-        device_class="temperature",
-    ),
-    "P_EVSGT": WritableSpec(
-        key="P_EVSGT",
-        platform=PLATFORM_NUMBER,
-        write_via="functiondata",
-        min=-10,
-        max=10,
-        step=1,
-        unit="°C",
-        device_class="temperature",
+        name=("Warmwasser-Minimaltemperatur", "Hot water minimum temperature"),
     ),
 }
+
+# Commissioning (EasyOn) parameters: shown read-only, they are not adjustable
+# in the UHI user interface and have no read endpoint (values arrive only
+# when they change, the last one is restored).
+COMMISSIONING_KEYS: tuple[str, ...] = (
+    "P_EVS",
+    "P_EVSGT",
+    "P_HK1_END",
+    "P_HK1_MAX",
+    "P_HK1_FWR_SOLL",
+    "P_HK1_RT_GT",
+    "P_WW_SOLLAB",
+)
+
+# Smart Grid (SG Ready) state as reported by the WPM inputs, in order.
+SMART_GRID_KEYS: tuple[tuple[str, str], ...] = (
+    ("SmartGrid_Niedrig", "low"),
+    ("SmartGrid_Normal", "normal"),
+    ("SmartGrid_Hoch", "high"),
+    ("SmartGrid_Problem", "problem"),
+)
+
+
+def smart_grid_state(data: dict[str, Any]) -> str | None:
+    """Current Smart Grid state from the four input flags, if one is set."""
+    for key, state in SMART_GRID_KEYS:
+        try:
+            if int(float(data.get(key) or 0)) == 1:
+                return state
+        except (TypeError, ValueError):
+            continue
+    return None
 
 # Core sensors that are enabled by default (in addition to the group
 # DATEN_DISPLAY_BETREIBER and all writable keys).
@@ -210,9 +172,7 @@ def is_curated(key: str, group: str | None) -> bool:
         return True
     if key in CURATED_SENSOR_KEYS:
         return True
-    if group is not None and group in CURATED_GROUPS:
-        return True
-    return False
+    return group is not None and group in CURATED_GROUPS
 
 
 def coerce_number(payload: Any) -> Any:

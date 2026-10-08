@@ -113,7 +113,7 @@ def _load_names() -> dict:
 def _resolve_name(key: str, desc: str | None) -> str:
     """Readable name: name file -> usable desc -> humanized key."""
     names = _load_names()
-    if key in names and names[key]:
+    if names.get(key):
         return names[key]
     if desc and desc != key:
         return desc

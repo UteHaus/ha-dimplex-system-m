@@ -20,7 +20,7 @@ scale: factor by which the raw socket value is divided (intFac). Default 1
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
