@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
-from .entity import DimplexUhiEntity, build_device_info
+from .entity import DimplexUhiEntity, build_device_info, entity_id_adder
 from .models import (
     PLATFORM_NUMBER,
     WRITABLE_SPECS,
@@ -37,6 +37,9 @@ _UNIT_NAMES: dict[str, tuple[str, str]] = {
     "WARMWASSER": ("Warmwasser-Solltemperatur", "Hot water setpoint"),
     "SCHWIMMBAD": ("Schwimmbad-Solltemperatur", "Pool setpoint"),
 }
+
+# Heating units that took over the entity of a former function data number.
+LEGACY_UNIT_IDS: dict[str, str] = {"WW": "P_WW_SOLL"}
 
 # operationmode field -> (German, English, unit, min, max)
 _MODE_LIMITS: dict[str, tuple[str, str, str, float, float]] = {
@@ -70,6 +73,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities = entity_id_adder(coordinator, "number", async_add_entities)
     entities: list[NumberEntity] = [
         DimplexUhiNumber(coordinator, spec)
         for spec in WRITABLE_SPECS.values()
@@ -178,7 +182,9 @@ class DimplexUhiHeatingUnitNumber(
         super().__init__(coordinator)
         self._unit_id = unit_id
         unit = coordinator.heating_units[unit_id]
-        self._attr_unique_id = f"{coordinator.identifier}_heatingunit_{unit_id}"
+        # Hot water replaces the former P_WW_SOLL number: keep its entity.
+        suffix = LEGACY_UNIT_IDS.get(unit_id, f"heatingunit_{unit_id}")
+        self._attr_unique_id = f"{coordinator.identifier}_{suffix}"
         self._attr_device_info = build_device_info(coordinator)
         german, english = _UNIT_NAMES.get(
             unit.get("type"), ("{name} Solltemperatur", "{name} setpoint")

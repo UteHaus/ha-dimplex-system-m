@@ -21,7 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
 from .discovery import setup_dynamic_entities
-from .entity import DimplexUhiEntity, build_device_info
+from .entity import DimplexUhiEntity, build_device_info, entity_id_adder
 from .models import (
     COMMISSIONING_KEYS,
     ENERGY_POWER_KEY,
@@ -48,6 +48,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities = entity_id_adder(coordinator, "sensor", async_add_entities)
     setup_dynamic_entities(
         coordinator, PLATFORM_SENSOR, DimplexUhiSensor, async_add_entities
     )
@@ -120,9 +121,7 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
         self._attr_unique_id = f"{coordinator.identifier}_ac_input_energy"
         self._attr_device_info = build_device_info(coordinator)
         self._attr_name = (
-            "Stromverbrauch"
-            if coordinator.language == "de"
-            else "Power consumption"
+            "Stromverbrauch" if coordinator.language == "de" else "Power consumption"
         )
         self._energy_kwh: float = 0.0
         self._last_power: float | None = None
@@ -225,9 +224,7 @@ class DimplexUhiCommissioningSensor(DimplexUhiEntity, RestoreSensor):
         return value
 
 
-class DimplexUhiSmartGridSensor(
-    CoordinatorEntity[DimplexUhiCoordinator], SensorEntity
-):
+class DimplexUhiSmartGridSensor(CoordinatorEntity[DimplexUhiCoordinator], SensorEntity):
     """Smart Grid (SG Ready) state as reported by the WPM inputs."""
 
     _attr_has_entity_name = False

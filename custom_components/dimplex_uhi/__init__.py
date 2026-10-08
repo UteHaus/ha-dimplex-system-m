@@ -23,6 +23,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import DimplexUhiCoordinator
+from .migrate import async_migrate_entities
 from .names import preload
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    async_migrate_entities(hass, entry, coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))

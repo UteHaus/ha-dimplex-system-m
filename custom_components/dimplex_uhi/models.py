@@ -66,6 +66,10 @@ COMMISSIONING_KEYS: tuple[str, ...] = (
     "P_WW_SOLLAB",
 )
 
+# Not created as generic sensors: P_WW_SOLL is the hot water heating unit
+# setpoint (number entity).
+EXCLUDED_DISCOVERY_KEYS: frozenset[str] = frozenset({"P_WW_SOLL"})
+
 # Smart Grid (SG Ready) state as reported by the WPM inputs, in order.
 SMART_GRID_KEYS: tuple[tuple[str, str], ...] = (
     ("SmartGrid_Niedrig", "low"),

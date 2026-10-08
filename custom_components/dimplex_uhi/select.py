@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
-from .entity import DimplexUhiEntity, build_device_info
+from .entity import DimplexUhiEntity, build_device_info, entity_id_adder
 from .models import (
     PLATFORM_SELECT,
     WRITABLE_SPECS,
@@ -27,6 +27,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities = entity_id_adder(coordinator, "select", async_add_entities)
     entities: list[SelectEntity] = [
         DimplexUhiModeSelect(coordinator, spec)
         for spec in WRITABLE_SPECS.values()

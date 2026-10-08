@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
 from .discovery import setup_dynamic_entities
-from .entity import DimplexUhiEntity
+from .entity import DimplexUhiEntity, entity_id_adder
 from .models import PLATFORM_BINARY_SENSOR, resolve_binary_device_class
 
 
@@ -20,6 +20,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities = entity_id_adder(
+        coordinator, "binary_sensor", async_add_entities
+    )
     setup_dynamic_entities(
         coordinator, PLATFORM_BINARY_SENSOR, DimplexUhiBinarySensor, async_add_entities
     )

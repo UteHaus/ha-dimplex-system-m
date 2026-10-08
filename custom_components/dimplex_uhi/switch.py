@@ -12,7 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import DimplexUhiCoordinator
-from .entity import build_device_info
+from .entity import build_device_info, entity_id_adder
 from .names import resolve_name
 
 AUTOMATIC_KEY = "P_TBaUs"
@@ -24,6 +24,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities = entity_id_adder(coordinator, "switch", async_add_entities)
     async_add_entities([DimplexUhiAutomaticSwitch(coordinator)])
 
 
