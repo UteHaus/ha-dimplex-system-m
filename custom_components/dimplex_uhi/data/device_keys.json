@@ -4326,7 +4326,7 @@
 "minVal": 2,
 "monitor": false,
 "regType": "I",
-"unit": null
+"unit": "UNIT_DEG_KELVIN"
 },
 "P_REGS": {
 "desc": "Übertemperatur Schwimmbad",

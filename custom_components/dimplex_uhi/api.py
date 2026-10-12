@@ -240,6 +240,32 @@ class UhiApiClient:
         )
         return data if isinstance(data, dict) else {}
 
+    async def get_system_status(self) -> dict:
+        """Response: { uptime, current_error, cloud_connection, has_internet,
+        simulation_mode }. has_internet is checked live (HTTPS, up to 10 s)."""
+        data = await self._get("/api/system/status")
+        return data if isinstance(data, dict) else {}
+
+    async def get_update_check(self) -> dict:
+        """Ask the UHI whether the vendor offers a newer UHI version.
+
+        Response: { oldRemoteUpdateStatus: { available, latest: { version } },
+        applianceFirmwareUpdateStatus }. The UHI contacts the vendor server.
+        """
+        data = await self._get("/api/system/update/check")
+        return data if isinstance(data, dict) else {}
+
+    async def get_update_status(self) -> dict:
+        """Response: { code: 0 idle | 10 UHI | 20 WPM, state, current_step_no,
+        total_step_no, ... }."""
+        data = await self._get("/api/system/update")
+        return data if isinstance(data, dict) else {}
+
+    async def start_update(self) -> dict:
+        """Request the UHI update; the UHI updater starts it within ~10 s."""
+        data = await self._put("/api/system/update", {})
+        return data if isinstance(data, dict) else {}
+
     async def get_function_data_groups(self, groups: Iterable[str]) -> dict:
         """GET /api/functiondata/groups?groups=...
 

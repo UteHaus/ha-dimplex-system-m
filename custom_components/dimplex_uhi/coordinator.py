@@ -85,6 +85,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Heating units (circuits, rooms, hot water, pool) by id; each:
         # { id, type, name, min, max, step, target, current, rapidheating }
         self.heating_units: dict[str, dict[str, Any]] = {}
+        # Last UHI update progress: GET /api/system/update or the updater's
+        # 'system.update' broadcast ({ code, current_step_no, ... }).
+        self.update_status: dict[str, Any] = {}
 
         # Platform callbacks to discover new keys dynamically.
         self._known_keys: set[str] = set()
@@ -372,6 +375,11 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Take over API responses the UHI broadcasts to all clients."""
         if route.startswith("heatingunit") or route == "data.rapidheating":
             self._handle_heating_unit_response(route, body, path)
+            return
+        if route == "system.update":
+            if isinstance(body, dict):
+                self.update_status = body
+                self.async_update_listeners()
             return
         if route.startswith("operationmode"):
             # GET/PUT return the mode object, /list a list (ignored).

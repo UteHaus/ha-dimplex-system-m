@@ -26,6 +26,16 @@ itself.
   the UHI.
 - **Smart Grid** state (low / normal / high / problem) as reported by the WPM
   (read-only, see [Smart Grid](#smart-grid-sg-ready)).
+- **UHI software update** (update entity, disabled by default): shows the
+  installed UHI version and the one the vendor offers, and installs it like the
+  "Update" button of the UHI web UI, with progress. It checks for a new
+  version every two days, and only when the UHI reports an internet connection
+  (`has_internet` in `/api/system/status`); otherwise it retries hourly. The
+  UHI may reboot its controller at the end; enable the entity under the
+  device's entities if you want it. Each integration release states the UHI
+  version it was tested with: an update to a newer UHI **major** version is
+  blocked in Home Assistant (update the integration first, or use the UHI web
+  UI), a newer minor/patch version shows a warning in the update dialog.
 - **Units and device classes** are assigned automatically (temperature, pressure,
   power, voltage, energy, etc.), including correct icons and long-term statistics.
 - **Energy meter**: a derived `Power consumption` sensor integrates the AC power

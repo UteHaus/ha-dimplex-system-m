@@ -144,6 +144,19 @@ def api():
         "set_rapid_heating": AsyncMock(
             side_effect=lambda unit_id, level: {"level": level, "id": unit_id}
         ),
+        "get_system_status": AsyncMock(return_value={"has_internet": True}),
+        "get_update_check": AsyncMock(
+            return_value={
+                "oldRemoteUpdateStatus": {
+                    "available": True,
+                    "latest": {"version": "4.4.0"},
+                }
+            }
+        ),
+        "get_update_status": AsyncMock(return_value={"code": 0, "desc": "Idle"}),
+        "start_update": AsyncMock(
+            return_value={"code": 10, "state": "REQUESTED", "component": "UHI"}
+        ),
         "connect_socket": AsyncMock(),
         "disconnect_socket": AsyncMock(),
     }
@@ -616,3 +629,184 @@ async def test_entity_migration(hass: HomeAssistant, api) -> None:
     # Target taken by another entity: next free id, nothing overwritten.
     assert uid("sensor.wp_vorlauftemperatur") == f"{SERIAL}_E_Vorl_T"
     assert uid("sensor.wp_vorlauftemperatur_2") == f"{SERIAL}_E_Vorl_T_WP"
+
+
+async def test_uhi_update(hass: HomeAssistant, api) -> None:
+    with patch(
+        "custom_components.dimplex_uhi.update.DimplexUhiUpdate."
+        "_attr_entity_registry_enabled_default",
+        True,
+    ):
+        _, coord = await _setup(hass)
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "update", DOMAIN, f"{SERIAL}_uhi_update"
+    )
+    state = hass.states.get(entity_id)
+    assert state.state == "on"
+    assert state.attributes["installed_version"] == "3.1.4"
+    assert state.attributes["latest_version"] == "4.4.0"
+
+    await hass.services.async_call(
+        "update", "install", {"entity_id": entity_id}, blocking=True
+    )
+    api["start_update"].assert_awaited_once()
+    assert hass.states.get(entity_id).attributes["in_progress"] is True
+    # 4.4.0 is newer than the tested 4.3.4 (same major): warning only.
+    assert "4.3.4" in hass.states.get(entity_id).attributes["release_summary"]
+
+    # Progress broadcast of the UHI updater.
+    coord._handle_api_response(
+        "system.update",
+        {"code": 10, "current_step_no": 3, "total_step_no": 12},
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).attributes["update_percentage"] == 25
+
+    # Finished: the status poll sees idle and the new version.
+    api["get_version"].return_value = {"uhi": {"version": "4.4.0"}}
+    api["get_update_check"].return_value = {
+        "oldRemoteUpdateStatus": {"available": False}
+    }
+    await coord.hass.data["entity_components"]["update"].get_entity(
+        entity_id
+    )._async_poll_status()
+    await hass.async_block_till_done()
+    state = hass.states.get(entity_id)
+    assert state.state == "off"
+    assert state.attributes["in_progress"] is False
+    assert state.attributes["installed_version"] == "4.4.0"
+
+
+async def test_uhi_update_check_needs_internet(hass: HomeAssistant, api) -> None:
+    api["get_system_status"].return_value = {"has_internet": False}
+    with patch(
+        "custom_components.dimplex_uhi.update.DimplexUhiUpdate."
+        "_attr_entity_registry_enabled_default",
+        True,
+    ):
+        await _setup(hass)
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "update", DOMAIN, f"{SERIAL}_uhi_update"
+    )
+    entity = hass.data["entity_components"]["update"].get_entity(entity_id)
+    # Offline: the vendor is not asked.
+    api["get_update_check"].assert_not_awaited()
+    assert hass.states.get(entity_id).state == "off"
+
+    # Online, but the UHI could not reach the vendor: dummy answer ignored.
+    api["get_system_status"].return_value = {"has_internet": True}
+    api["get_update_check"].return_value = {
+        "oldRemoteUpdateStatus": {"available": False, "latest": {"version": "0.0.0"}}
+    }
+    await entity._async_check()
+    assert entity._last_check is None
+
+    # Successful check; the next one only after two days.
+    api["get_update_check"].return_value = {
+        "oldRemoteUpdateStatus": {"available": True, "latest": {"version": "4.4.0"}}
+    }
+    await entity._async_check()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).attributes["latest_version"] == "4.4.0"
+    calls = api["get_update_check"].await_count
+    await entity._async_check()
+    assert api["get_update_check"].await_count == calls
+    entity._last_check -= 2 * 24 * 3600
+    await entity._async_check()
+    assert api["get_update_check"].await_count == calls + 1
+
+
+async def test_uhi_update_disabled_by_default(hass: HomeAssistant, api) -> None:
+    await _setup(hass)
+    reg_entry = er.async_get(hass).async_get(
+        er.async_get(hass).async_get_entity_id(
+            "update", DOMAIN, f"{SERIAL}_uhi_update"
+        )
+    )
+    assert reg_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    api["get_update_check"].assert_not_awaited()
+
+
+def test_uhi_compatibility() -> None:
+    from custom_components.dimplex_uhi.update import (
+        BLOCK,
+        COMPATIBLE,
+        MESSAGES,
+        WARN,
+        compatibility,
+        parse_version,
+    )
+
+    assert parse_version("4.3.4") == (4, 3, 4)
+    assert parse_version("v5.1") == (5, 1, 0)
+    assert parse_version("next") is None
+    assert compatibility("4.3.4", "4.3.4") == COMPATIBLE
+    assert compatibility("4.2.0", "4.3.4") == COMPATIBLE
+    assert compatibility("4.3.5", "4.3.4") == WARN
+    assert compatibility("4.10.0", "4.3.4") == WARN
+    assert compatibility("5.0.0", "4.3.4") == BLOCK
+    assert compatibility("garbage", "4.3.4") == WARN
+    # Release summaries are limited to 255 characters.
+    for texts in MESSAGES.values():
+        for text in texts.values():
+            filled = text.format(
+                latest="10.10.10", tested="10.10.10", integration="10.10.10"
+            )
+            assert len(filled) <= 255, filled
+
+
+async def test_uhi_update_major_blocked(hass: HomeAssistant, api) -> None:
+    api["get_update_check"].return_value = {
+        "oldRemoteUpdateStatus": {"available": True, "latest": {"version": "5.0.0"}}
+    }
+    with patch(
+        "custom_components.dimplex_uhi.update.DimplexUhiUpdate."
+        "_attr_entity_registry_enabled_default",
+        True,
+    ):
+        await _setup(hass)
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "update", DOMAIN, f"{SERIAL}_uhi_update"
+    )
+    state = hass.states.get(entity_id)
+    assert state.attributes["latest_version"] == "5.0.0"
+    assert "gesperrt" in state.attributes["release_summary"]
+    with pytest.raises(HomeAssistantError, match=r"5\.0\.0"):
+        await hass.services.async_call(
+            "update", "install", {"entity_id": entity_id}, blocking=True
+        )
+    api["start_update"].assert_not_awaited()
+
+
+async def test_uhi_update_check_uhi3_format(hass: HomeAssistant, api) -> None:
+    # UHI 3.x answers without the oldRemoteUpdateStatus wrapper.
+    api["get_update_check"].return_value = {
+        "available": True,
+        "latest": {"version": "3.2.0"},
+    }
+    with patch(
+        "custom_components.dimplex_uhi.update.DimplexUhiUpdate."
+        "_attr_entity_registry_enabled_default",
+        True,
+    ):
+        await _setup(hass)
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "update", DOMAIN, f"{SERIAL}_uhi_update"
+    )
+    assert hass.states.get(entity_id).attributes["latest_version"] == "3.2.0"
+
+    # Vendor not reachable on UHI 3.x: 'latest: null', check not counted.
+    entity = hass.data["entity_components"]["update"].get_entity(entity_id)
+    entity._last_check = None
+    api["get_update_check"].return_value = {"available": False, "latest": None}
+    await entity._async_check()
+    assert entity._last_check is None
+    assert hass.states.get(entity_id).attributes["latest_version"] == "3.2.0"
+
+
+def test_unit_from_seunit() -> None:
+    from custom_components.dimplex_uhi.models import resolve_unit_for_key
+    from custom_components.dimplex_uhi.names import device_keys
+
+    # UHI 4.3.4 keeps the unit of P_REGH in 'seunit' (see extract_names.py).
+    assert resolve_unit_for_key("P_REGH", None, device_keys()["P_REGH"]) == "K"
