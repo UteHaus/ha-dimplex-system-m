@@ -16,8 +16,8 @@ itself.
   - Operating mode and automatic mode switching, including its heating and
     cooling limit and switching delay
   - Setpoint of each heating unit: heating curve shift (or flow/room setpoint,
-    depending on the circuit type), hot water, and the pool if it delivers a
-    reading
+    depending on the circuit type), hot water (adjustable in 5 °C steps), and
+    the pool if it delivers a reading
   - Rapid heating level of the heating circuits
   - Hot water minimum temperature (`P_WW_MIN_TEMP`)
 - **Commissioning parameters** (EVU lock `P_EVS`, `P_EVSGT`, heating curve end

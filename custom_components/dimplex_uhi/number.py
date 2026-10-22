@@ -220,6 +220,8 @@ class DimplexUhiHeatingUnitNumber(
 
     @property
     def native_step(self) -> float:
+        if self._unit.get("type") == "WARMWASSER":
+            return 5
         return self._unit.get("step") or 1
 
     @property

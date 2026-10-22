@@ -274,9 +274,11 @@ async def test_heating_units(hass: HomeAssistant, api) -> None:
     assert hk1.state == "1"
     assert (hk1.attributes["min"], hk1.attributes["max"]) == (-19, 19)
     assert hk1.attributes["unit_of_measurement"] == "K"
+    assert hk1.attributes["step"] == 1
     ww = _state(hass, "P_WW_SOLL")  # took over the former P_WW_SOLL number
     assert ww.state == "50"
     assert (ww.attributes["min"], ww.attributes["max"]) == (30, 60)
+    assert ww.attributes["step"] == 5
     ent_reg = er.async_get(hass)
     assert (
         ent_reg.async_get_entity_id("number", DOMAIN, f"{SERIAL}_heatingunit_SW")
