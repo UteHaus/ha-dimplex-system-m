@@ -115,6 +115,19 @@ _ABBREV_DE: dict[str, str] = {
     "sun": "Sonntag",
 }
 
+# Namen für Keys ohne i18n-Eintrag, deren Bedeutung bekannt ist
+# (Inverter-Telemetrie); haben Vorrang vor dem Humanizer.
+_NAME_OVERRIDES: dict[str, dict[str, str]] = {
+    "WPIO2_r_ECT_AC_Inp_Power": {
+        "de": "Leistungsaufnahme (AC)",
+        "en": "Power input (AC)",
+    },
+    "WPIO2_r_ECT_AC_Inp_Volt": {
+        "de": "Netzspannung (AC)",
+        "en": "Mains voltage (AC)",
+    },
+}
+
 _ABBREV_EN: dict[str, str] = {
     "a": "Output",
     "e": "Input",
@@ -283,6 +296,9 @@ def main() -> int:
 
     names_de = _build_name_map(de_common, de_easyon)
     names_en = _build_name_map(en_common, en_easyon)
+    for key, names in _NAME_OVERRIDES.items():
+        names_de.setdefault(key, names["de"])
+        names_en.setdefault(key, names["en"])
 
     device_keys = _load_json(
         uhi_root / "external" / "communicator" / "config" / "deviceKeys.json"
@@ -322,7 +338,9 @@ def main() -> int:
             "intFac": meta.get("intFac"),
             "minVal": meta.get("minVal"),
             "maxVal": meta.get("maxVal"),
-            "unit": meta.get("unit"),
+            # UHI 4.x hat die Einheit einzelner Keys (z. B. P_REGH) nach
+            # 'seunit' verschoben.
+            "unit": meta.get("unit") or meta.get("seunit"),
             "desc": meta.get("desc"),
             "monitor": meta.get("monitor"),
         }

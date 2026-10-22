@@ -16,8 +16,8 @@ itself.
   - Operating mode and automatic mode switching, including its heating and
     cooling limit and switching delay
   - Setpoint of each heating unit: heating curve shift (or flow/room setpoint,
-    depending on the circuit type), hot water, and the pool if it delivers a
-    reading
+    depending on the circuit type), hot water (adjustable in 5 °C steps), and
+    the pool if it delivers a reading
   - Rapid heating level of the heating circuits
   - Hot water minimum temperature (`P_WW_MIN_TEMP`)
 - **Commissioning parameters** (EVU lock `P_EVS`, `P_EVSGT`, heating curve end
@@ -26,6 +26,16 @@ itself.
   the UHI.
 - **Smart Grid** state (low / normal / high / problem) as reported by the WPM
   (read-only, see [Smart Grid](#smart-grid-sg-ready)).
+- **UHI software update** (update entity, disabled by default): shows the
+  installed UHI version and the one the vendor offers, and installs it like the
+  "Update" button of the UHI web UI, with progress. It checks for a new
+  version every two days, and only when the UHI reports an internet connection
+  (`has_internet` in `/api/system/status`); otherwise it retries hourly. The
+  UHI may reboot its controller at the end; see
+  [UHI software update](#uhi-software-update) for how to enable it. Each integration release states the UHI
+  version it was tested with: an update to a newer UHI **major** version is
+  blocked in Home Assistant (update the integration first, or use the UHI web
+  UI), a newer minor/patch version shows a warning in the update dialog.
 - **Units and device classes** are assigned automatically (temperature, pressure,
   power, voltage, energy, etc.), including correct icons and long-term statistics.
 - **Energy meter**: a derived `Power consumption` sensor integrates the AC power
@@ -69,6 +79,20 @@ WPM as intended by Dimplex: two potential-free contacts (e.g. relays switched
 by Home Assistant) on the WPM's SG Ready inputs, with Smart Grid enabled in the
 commissioning (EasyOn) of the WPM. The integration then shows the resulting
 state.
+
+### UHI software update
+
+The update entity *UHI software* is disabled by default. To enable it:
+
+1. *Settings → Devices & services → Dimplex System M (UHI)* → open the device.
+2. Under *Configuration*, click *+1 entity not shown* and select *UHI software*.
+3. Open its settings (gear icon), switch on *Enabled* and confirm. Home
+   Assistant reloads the integration after about 30 seconds.
+
+It appears under *Settings → Updates* only when the vendor offers a newer UHI
+version. The check runs every two days and only while the UHI has internet
+access; without it, the entity just shows the installed version. Installing
+starts only when you click *Install*.
 
 ## Connecting to UHI
 

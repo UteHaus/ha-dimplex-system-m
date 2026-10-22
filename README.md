@@ -140,7 +140,10 @@ The same check runs on GitHub for every push and pull request.
 Releases are built by GitHub Actions when a version tag is pushed:
 
 1. Set `version` in `custom_components/dimplex_uhi/manifest.json`
-   (e.g. `0.2.0`) and commit it.
+   (e.g. `0.2.0`) and commit it. If the release was tested against a newer UHI
+   version, also set `TESTED_UHI_VERSION` in `custom_components/dimplex_uhi/const.py`:
+   the update entity blocks UHI updates to a newer major version than this and
+   warns about newer minor/patch versions.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
 
 The workflow checks that the tag matches the manifest version, runs ruff and

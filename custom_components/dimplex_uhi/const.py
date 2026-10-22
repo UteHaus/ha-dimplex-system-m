@@ -33,6 +33,11 @@ DEFAULT_STATE_INTERVAL: Final = 60
 # Duration used when party/holiday mode is selected (the UHI needs an end).
 DEFAULT_PARTY_HOURS: Final = 4
 
+# Newest UHI version this integration release was tested with. The update
+# entity blocks UHI updates to a newer major version and warns about newer
+# minor/patch versions. Raise it after checking a UHI release.
+TESTED_UHI_VERSION: Final = "4.3.4"
+
 # Socket.IO
 SOCKETIO_PATH: Final = "/broadcast/socket"
 OPERATIONDATA_EVENT: Final = "uhi.collector.operationdata.change-bundle"
