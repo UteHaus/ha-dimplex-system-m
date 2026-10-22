@@ -31,8 +31,8 @@ itself.
   "Update" button of the UHI web UI, with progress. It checks for a new
   version every two days, and only when the UHI reports an internet connection
   (`has_internet` in `/api/system/status`); otherwise it retries hourly. The
-  UHI may reboot its controller at the end; enable the entity under the
-  device's entities if you want it. Each integration release states the UHI
+  UHI may reboot its controller at the end; see
+  [UHI software update](#uhi-software-update) for how to enable it. Each integration release states the UHI
   version it was tested with: an update to a newer UHI **major** version is
   blocked in Home Assistant (update the integration first, or use the UHI web
   UI), a newer minor/patch version shows a warning in the update dialog.
@@ -79,6 +79,20 @@ WPM as intended by Dimplex: two potential-free contacts (e.g. relays switched
 by Home Assistant) on the WPM's SG Ready inputs, with Smart Grid enabled in the
 commissioning (EasyOn) of the WPM. The integration then shows the resulting
 state.
+
+### UHI software update
+
+The update entity *UHI software* is disabled by default. To enable it:
+
+1. *Settings → Devices & services → Dimplex System M (UHI)* → open the device.
+2. Under *Configuration*, click *+1 entity not shown* and select *UHI software*.
+3. Open its settings (gear icon), switch on *Enabled* and confirm. Home
+   Assistant reloads the integration after about 30 seconds.
+
+It appears under *Settings → Updates* only when the vendor offers a newer UHI
+version. The check runs every two days and only while the UHI has internet
+access; without it, the entity just shows the installed version. Installing
+starts only when you click *Install*.
 
 ## Connecting to UHI
 
