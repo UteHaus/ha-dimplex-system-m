@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from functools import cache, lru_cache
+from functools import cache
 import json
 import logging
 from pathlib import Path
@@ -16,25 +16,18 @@ _DATA_DIR = Path(__file__).parent / "data"
 
 
 @cache
+def _load_json(name: str) -> dict:
+    path = _DATA_DIR / name
+    try:
+        with path.open(encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning("%s not loadable: %s", path, exc)
+        return {}
+
+
 def _load_names(language: str) -> dict[str, str]:
-    path = _DATA_DIR / f"names_{language}.json"
-    try:
-        with path.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError) as exc:
-        _LOGGER.warning("Name file %s not loadable: %s", path, exc)
-        return {}
-
-
-@lru_cache(maxsize=1)
-def _load_device_keys() -> dict[str, dict]:
-    path = _DATA_DIR / "device_keys.json"
-    try:
-        with path.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError) as exc:
-        _LOGGER.warning("device_keys.json not loadable: %s", exc)
-        return {}
+    return _load_json(f"names_{language}.json")
 
 
 def normalize_language(language: str | None) -> str:
@@ -46,12 +39,12 @@ def normalize_language(language: str | None) -> str:
 def preload(language: str) -> None:
     """Load the data files (blocking I/O; run in the executor at setup)."""
     _load_names(normalize_language(language))
-    _load_device_keys()
+    device_keys()
 
 
 def device_keys() -> dict[str, dict]:
     """Bundled deviceKeys metadata (fallback source)."""
-    return _load_device_keys()
+    return _load_json("device_keys.json")
 
 
 def _humanize(key: str) -> str:

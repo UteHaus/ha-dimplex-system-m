@@ -90,16 +90,10 @@ class DimplexUhiSensor(DimplexUhiEntity, SensorEntity):
         # Prefer the class derived from the unit.
         if self._unit_state_class:
             return SensorStateClass(self._unit_state_class)
-        value = self._raw_value
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, (int, float)):
+        value = self.native_value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
             return SensorStateClass.MEASUREMENT
-        try:
-            float(value)
-        except (TypeError, ValueError):
-            return None
-        return SensorStateClass.MEASUREMENT
+        return None
 
 
 class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSensor):
@@ -120,8 +114,8 @@ class DimplexUhiEnergySensor(CoordinatorEntity[DimplexUhiCoordinator], RestoreSe
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.identifier}_ac_input_energy"
         self._attr_device_info = build_device_info(coordinator)
-        self._attr_name = (
-            "Stromverbrauch" if coordinator.language == "de" else "Power consumption"
+        self._attr_name = label(
+            coordinator.language, "Stromverbrauch", "Power consumption"
         )
         self._energy_kwh: float = 0.0
         self._last_power: float | None = None

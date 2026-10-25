@@ -10,6 +10,7 @@ Only existing endpoints/socket are used – NO change to the UHI.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 import json
 import logging
 from typing import Any
@@ -123,15 +124,14 @@ class UhiApiClient:
             self._headers["Device"] = device_id
 
         self._sio: socketio.AsyncClient | None = None
-        self._on_operationdata: (
-            Callable[[dict[str, Any]], Awaitable[None]] | None
-        ) = None
-        self._on_connect: Callable[[], None] | None = None
-        self._on_api_response: Callable[[str, Any, str], None] | None = None
-
-    @property
-    def base_url(self) -> str:
-        return self._base_url
+        # Set by the coordinator.
+        self.on_operationdata: Callable[[dict[str, Any]], Awaitable[None]] | None = (
+            None
+        )
+        # Called on every (re)connect of the socket.
+        self.on_connect: Callable[[], None] | None = None
+        # Called with (route, body, path) for every successful 'api.response'.
+        self.on_api_response: Callable[[str, Any, str], None] | None = None
 
     @property
     def socket_active(self) -> bool:
@@ -143,108 +143,88 @@ class UhiApiClient:
         return self._sio is not None and self._sio.connected
 
     # ---------------- REST ----------------
-    async def _get(self, path: str, params: dict | None = None) -> Any:
-        url = f"{self._base_url}{path}"
-        try:
-            async with self._session.get(
-                url,
-                params=params,
-                headers=self._headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status in (401, 403):
-                    raise UhiAuthError(f"HTTP {resp.status} at {path}")
-                resp.raise_for_status()
-                return await resp.json()
-        except aiohttp.ClientError as exc:
-            raise UhiApiError(f"GET {path} failed: {exc}") from exc
-
-    async def _put(self, path: str, payload: dict) -> Any:
-        return await self._send("PUT", path, payload)
-
-    async def _post(self, path: str, payload: dict) -> Any:
-        return await self._send("POST", path, payload)
-
-    async def _send(self, method: str, path: str, payload: dict) -> Any:
-        url = f"{self._base_url}{path}"
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        params: dict | None = None,
+        expect: type = dict,
+    ) -> Any:
+        """Send a request; a response of another type than `expect` is empty."""
+        headers = dict(self._headers)
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
         try:
             async with self._session.request(
                 method,
-                url,
-                data=encode_body(payload),
-                headers={**self._headers, "Content-Type": "application/json"},
+                f"{self._base_url}{path}",
+                params=params,
+                data=None if payload is None else encode_body(payload),
+                headers=headers,
                 # Writes run a script on the UHI; its proxy gives up after 60 s.
-                timeout=aiohttp.ClientTimeout(total=60),
+                timeout=aiohttp.ClientTimeout(total=30 if method == "GET" else 60),
             ) as resp:
                 if resp.status in (401, 403):
                     raise UhiAuthError(f"HTTP {resp.status} at {path}")
                 resp.raise_for_status()
-                return await resp.json()
+                data = await resp.json()
         except aiohttp.ClientError as exc:
             raise UhiApiError(f"{method} {path} failed: {exc}") from exc
+        return data if isinstance(data, expect) else expect()
 
     async def get_version(self) -> dict:
-        data = await self._get("/api/system/version")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", "/api/system/version")
 
     async def get_operation_mode_list(self) -> list[dict]:
-        data = await self._get("/api/operationmode/list")
-        return data if isinstance(data, list) else []
+        return await self._request("GET", "/api/operationmode/list", expect=list)
 
     async def get_serial_number(self) -> str | None:
         """Serial number of the heat pump manager (WPM), if known."""
-        data = await self._get("/api/system/serialnumber")
-        if not isinstance(data, dict):
-            return None
+        data = await self._request("GET", "/api/system/serialnumber")
         serial = data.get("serial_number") or data.get("wpm_serial_number")
         return str(serial) if serial else None
 
     async def get_operation_mode(self) -> dict:
         """Current mode: { id, is_automatic_mode, name, dateStart, ... }."""
-        data = await self._get("/api/operationmode")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", "/api/operationmode")
 
     async def set_operation_mode(
         self, mode_id: int, is_automatic: bool, **extra: Any
     ) -> dict:
         """Set the mode; without is_automatic_mode the UHI turns automatic off."""
         payload = {"id": mode_id, "is_automatic_mode": int(is_automatic), **extra}
-        data = await self._put("/api/operationmode", payload)
-        return data if isinstance(data, dict) else {}
+        return await self._request("PUT", "/api/operationmode", payload)
 
     async def set_function_data(self, key: str, value: Any) -> dict:
-        data = await self._put(f"/api/functiondata/key/{key}", {"value": value})
-        return data if isinstance(data, dict) else {}
+        return await self._request(
+            "PUT", f"/api/functiondata/key/{key}", {"value": value}
+        )
 
     async def get_heating_units(self) -> list[dict]:
         """Heating circuits, rooms, hot water and pool the user can adjust."""
-        data = await self._get("/api/heatingunit/config")
-        return data if isinstance(data, list) else []
+        return await self._request("GET", "/api/heatingunit/config", expect=list)
 
     async def get_heating_unit_temperature(self, unit_id: str) -> dict:
         """Response: { current, target, offset }."""
-        data = await self._get(f"/api/heatingunit/{unit_id}/temperature")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", f"/api/heatingunit/{unit_id}/temperature")
 
     async def set_heating_unit_target(self, unit_id: str, target: float) -> dict:
         """Response: { current, target, setoff }."""
-        data = await self._put(
-            f"/api/heatingunit/{unit_id}/temperature", {"target": target}
+        return await self._request(
+            "PUT", f"/api/heatingunit/{unit_id}/temperature", {"target": target}
         )
-        return data if isinstance(data, dict) else {}
 
     async def set_rapid_heating(self, unit_id: str, level: int) -> dict:
         """Response: { level, id }."""
-        data = await self._post(
-            "/api/data/rapidheating", {"id": unit_id, "level": level}
+        return await self._request(
+            "POST", "/api/data/rapidheating", {"id": unit_id, "level": level}
         )
-        return data if isinstance(data, dict) else {}
 
     async def get_system_status(self) -> dict:
         """Response: { uptime, current_error, cloud_connection, has_internet,
         simulation_mode }. has_internet is checked live (HTTPS, up to 10 s)."""
-        data = await self._get("/api/system/status")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", "/api/system/status")
 
     async def get_update_check(self) -> dict:
         """Ask the UHI whether the vendor offers a newer UHI version.
@@ -252,48 +232,29 @@ class UhiApiClient:
         Response: { oldRemoteUpdateStatus: { available, latest: { version } },
         applianceFirmwareUpdateStatus }. The UHI contacts the vendor server.
         """
-        data = await self._get("/api/system/update/check")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", "/api/system/update/check")
 
     async def get_update_status(self) -> dict:
         """Response: { code: 0 idle | 10 UHI | 20 WPM, state, current_step_no,
         total_step_no, ... }."""
-        data = await self._get("/api/system/update")
-        return data if isinstance(data, dict) else {}
+        return await self._request("GET", "/api/system/update")
 
     async def start_update(self) -> dict:
         """Request the UHI update; the UHI updater starts it within ~10 s."""
-        data = await self._put("/api/system/update", {})
-        return data if isinstance(data, dict) else {}
+        return await self._request("PUT", "/api/system/update", {})
 
     async def get_function_data_groups(self, groups: Iterable[str]) -> dict:
         """GET /api/functiondata/groups?groups=...
 
         Response: { GROUP: [ { key, value, definition }, ... ], ... }
         """
-        data = await self._get(
-            "/api/functiondata/groups", params={"groups": ",".join(groups)}
+        return await self._request(
+            "GET", "/api/functiondata/groups", params={"groups": ",".join(groups)}
         )
-        return data if isinstance(data, dict) else {}
 
     # ---------------- Socket.IO ----------------
-    def set_operationdata_handler(
-        self, handler: Callable[[dict[str, Any]], Awaitable[None]]
-    ) -> None:
-        self._on_operationdata = handler
-
-    def set_connect_handler(self, handler: Callable[[], None]) -> None:
-        """Called on every (re)connect of the socket."""
-        self._on_connect = handler
-
-    def set_api_response_handler(
-        self, handler: Callable[[str, Any, str], None]
-    ) -> None:
-        """Called with (route, body, path) for every successful 'api.response'."""
-        self._on_api_response = handler
-
-    async def connect_socket(self, socket_url: str | None = None) -> None:
-        url = (socket_url or self._base_url).rstrip("/")
+    async def connect_socket(self) -> None:
+        url = self._base_url
         sio = socketio.AsyncClient(
             reconnection=True,
             reconnection_delay=2,
@@ -304,8 +265,8 @@ class UhiApiClient:
         @sio.event
         async def connect() -> None:
             _LOGGER.debug("Socket.IO connected (%s)", url)
-            if self._on_connect:
-                self._on_connect()
+            if self.on_connect:
+                self.on_connect()
 
         @sio.event
         async def disconnect() -> None:
@@ -314,14 +275,14 @@ class UhiApiClient:
         @sio.on(OPERATIONDATA_EVENT)
         async def _on_bundle(data: Any) -> None:
             values = data.get("payload") if isinstance(data, dict) else None
-            if isinstance(values, dict) and self._on_operationdata:
-                await self._on_operationdata(values)
+            if isinstance(values, dict) and self.on_operationdata:
+                await self.on_operationdata(values)
 
         @sio.on(API_RESPONSE_EVENT)
         async def _on_api_response(data: Any) -> None:
             parsed = parse_api_response(data)
-            if parsed is not None and self._on_api_response:
-                self._on_api_response(*parsed)
+            if parsed is not None and self.on_api_response:
+                self.on_api_response(*parsed)
 
         # python-socketio only reconnects automatically after a successful
         # first connect; a failed attempt leaves no session behind so the
@@ -335,8 +296,6 @@ class UhiApiClient:
 
     async def disconnect_socket(self) -> None:
         if self._sio is not None:
-            try:
+            with suppress(Exception):
                 await self._sio.disconnect()
-            except Exception:  # noqa: BLE001
-                pass
             self._sio = None

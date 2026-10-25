@@ -73,7 +73,7 @@ async def _validate(hass, data: dict[str, Any]) -> dict[str, Any]:
             device_id = await client.get_serial_number()
         except UhiApiError:
             device_id = None
-    return {"device_id": device_id, "base_url": base_url}
+    return {"device_id": device_id}
 
 
 class DimplexUhiConfigFlow(ConfigFlow, domain=DOMAIN):

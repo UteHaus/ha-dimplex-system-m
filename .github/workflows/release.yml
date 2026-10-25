@@ -58,6 +58,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Release may already exist (created in the web UI, which also
+          # pushes the tag and triggers this workflow, or a re-run).
+          # Then just attach/replace the zip instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP_NAME" --clobber
+            exit 0
+          fi
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" "$ZIP_NAME" \

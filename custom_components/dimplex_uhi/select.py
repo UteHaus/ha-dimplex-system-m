@@ -9,13 +9,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import DimplexUhiCoordinator
+from .coordinator import MODE_KEY, DimplexUhiCoordinator
 from .entity import DimplexUhiEntity, build_device_info, entity_id_adder
-from .models import (
-    PLATFORM_SELECT,
-    WRITABLE_SPECS,
-    WritableSpec,
-)
 from .names import label
 
 RAPID_HEATING_LEVELS = (0, 1, 2, 3)
@@ -28,11 +23,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: DimplexUhiCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities = entity_id_adder(coordinator, "select", async_add_entities)
-    entities: list[SelectEntity] = [
-        DimplexUhiModeSelect(coordinator, spec)
-        for spec in WRITABLE_SPECS.values()
-        if spec.platform == PLATFORM_SELECT and spec.write_via == "operationmode"
-    ]
+    entities: list[SelectEntity] = [DimplexUhiModeSelect(coordinator, MODE_KEY)]
     entities.extend(
         DimplexUhiRapidHeatingSelect(coordinator, unit_id)
         for unit_id, unit in coordinator.heating_units.items()
@@ -43,9 +34,6 @@ async def async_setup_entry(
 
 class DimplexUhiModeSelect(DimplexUhiEntity, SelectEntity):
     """Operation mode selection (BA_aktiv) via the operationmode API."""
-
-    def __init__(self, coordinator: DimplexUhiCoordinator, spec: WritableSpec) -> None:
-        super().__init__(coordinator, spec.key)
 
     @property
     def available(self) -> bool:

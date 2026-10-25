@@ -20,7 +20,6 @@ class WritableSpec:
 
     key: str
     platform: str  # "number" | "select"
-    write_via: str  # "functiondata" | "operationmode"
     min: float | None = None
     max: float | None = None
     step: float | None = None
@@ -38,12 +37,10 @@ WRITABLE_SPECS: dict[str, WritableSpec] = {
     "BA_aktiv": WritableSpec(
         key="BA_aktiv",
         platform=PLATFORM_SELECT,
-        write_via="operationmode",
     ),
     "P_WW_MIN_TEMP": WritableSpec(
         key="P_WW_MIN_TEMP",
         platform=PLATFORM_NUMBER,
-        write_via="functiondata",
         min=10,
         max=60,
         step=1,
@@ -114,7 +111,7 @@ def resolve_unit(definition: dict | None, meta: dict | None) -> str | None:
         if phys in UNIT_MAP:
             return UNIT_MAP[phys]
         if phys:
-            return phys or None
+            return phys
     if meta:
         return UNIT_MAP.get(meta.get("unit"))
     return None
@@ -136,10 +133,7 @@ def resolve_unit_for_key(
     key: str, definition: dict | None, meta: dict | None
 ) -> str | None:
     """Unit including key-specific overrides."""
-    override = KEY_UNIT_OVERRIDES.get(key)
-    if override is not None:
-        return override
-    return resolve_unit(definition, meta)
+    return KEY_UNIT_OVERRIDES.get(key) or resolve_unit(definition, meta)
 
 
 def is_binary(definition: dict | None, meta: dict | None) -> bool:
@@ -172,11 +166,9 @@ def classify_platform(key: str, definition: dict | None, meta: dict | None) -> s
 
 def is_curated(key: str, group: str | None) -> bool:
     """True if the entity should be enabled by default."""
-    if key in WRITABLE_SPECS:
-        return True
-    if key in CURATED_SENSOR_KEYS:
-        return True
-    return group is not None and group in CURATED_GROUPS
+    return (
+        key in WRITABLE_SPECS or key in CURATED_SENSOR_KEYS or group in CURATED_GROUPS
+    )
 
 
 def coerce_number(payload: Any) -> Any:

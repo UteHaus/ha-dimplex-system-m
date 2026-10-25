@@ -39,12 +39,7 @@ class DimplexUhiBinarySensor(DimplexUhiEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        value = self._raw_value
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
         try:
-            return int(float(value)) != 0
+            return int(float(self._raw_value)) != 0
         except (TypeError, ValueError):
             return None

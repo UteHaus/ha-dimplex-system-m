@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from datetime import timedelta
 import logging
 import time
@@ -78,7 +79,6 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.mac: str | None = None
         self.mode_id_to_name: dict[int, str] = {}
         self.mode_name_to_id: dict[str, int] = {}
-        self.mode_names: list[str] = []
         self.current_mode_id: int | None = None
         self.is_automatic: bool | None = None
         self.mode_limits: dict[str, float] = {}
@@ -100,9 +100,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_refresh_modes()
         await self._async_refresh_current_mode()
         await self._async_refresh_heating_units()
-        self.client.set_operationdata_handler(self._handle_live_values)
-        self.client.set_connect_handler(self._handle_socket_connect)
-        self.client.set_api_response_handler(self._handle_api_response)
+        self.client.on_operationdata = self._handle_live_values
+        self.client.on_connect = self._handle_socket_connect
+        self.client.on_api_response = self._handle_api_response
 
     async def async_connect_socket(self) -> None:
         try:
@@ -146,7 +146,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = time.monotonic()
         if now - self._last_version_poll >= self._version_interval:
             await self._async_refresh_version()
-        if not self.mode_names:
+        if not self.mode_name_to_id:
             await self._async_refresh_modes()
         # With a connected socket values, groups and mode arrive as push
         # (change bundles and re-broadcast API responses), so the snapshot is
@@ -261,7 +261,6 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         self.mode_id_to_name = {}
         self.mode_name_to_id = {}
-        self.mode_names = []
         for item in modes:
             try:
                 mode_id = int(item["id"])
@@ -272,7 +271,6 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             self.mode_id_to_name[mode_id] = name
             self.mode_name_to_id[name] = mode_id
-            self.mode_names.append(name)
 
     async def _async_refresh_current_mode(self) -> None:
         try:
@@ -480,20 +478,42 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     @property
+    def mode_names(self) -> list[str]:
+        return list(self.mode_name_to_id)
+
+    @property
     def known_keys(self) -> set[str]:
         return set(self._known_keys)
 
     # ---------------- Writing ----------------
-    async def async_set_function_data(self, key: str, value: Any) -> Any:
-        """Write a value and return the value confirmed by the UHI."""
+    async def _async_write(self, key: str, request: Awaitable[dict]) -> dict:
+        """Await a UHI write; errors become a translated HomeAssistantError."""
         try:
-            result = await self.client.set_function_data(key, value)
+            return await request
         except UhiApiError as exc:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="write_failed",
                 translation_placeholders={"key": key, "error": str(exc)},
             ) from exc
+
+    def _require_switchable_mode(self) -> int:
+        """Current mode id; automatic mode cannot change in timed modes."""
+        if self.current_mode_id is None:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="mode_unknown"
+            )
+        if self.current_mode_id in (MODE_HOLIDAY, MODE_PARTY):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="automatic_timed_mode"
+            )
+        return self.current_mode_id
+
+    async def async_set_function_data(self, key: str, value: Any) -> Any:
+        """Write a value and return the value confirmed by the UHI."""
+        result = await self._async_write(
+            key, self.client.set_function_data(key, value)
+        )
         confirmed = result.get("value")
         return value if confirmed is None else confirmed
 
@@ -509,15 +529,7 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_put_mode(mode_id, bool(self.is_automatic), **extra)
 
     async def async_set_automatic(self, enabled: bool) -> None:
-        if self.current_mode_id is None:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="mode_unknown"
-            )
-        if self.current_mode_id in (MODE_HOLIDAY, MODE_PARTY):
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="automatic_timed_mode"
-            )
-        await self._async_put_mode(self.current_mode_id, enabled)
+        await self._async_put_mode(self._require_switchable_mode(), enabled)
 
     async def async_set_mode_limit(self, field: str, value: float) -> None:
         """Set a limit of the automatic mode switching."""
@@ -526,16 +538,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="automatic_required"
             )
-        if self.current_mode_id is None:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="mode_unknown"
-            )
-        if self.current_mode_id in (MODE_HOLIDAY, MODE_PARTY):
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="automatic_timed_mode"
-            )
+        mode_id = self._require_switchable_mode()
         limits = {**self.mode_limits, field: value}
-        await self._async_put_mode(self.current_mode_id, True, **limits)
+        await self._async_put_mode(mode_id, True, **limits)
         self.mode_limits[field] = value
         self.async_update_listeners()
 
@@ -552,26 +557,16 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
             except (TypeError, ValueError):
                 pass
-        try:
-            result = await self.client.set_heating_unit_target(unit_id, value)
-        except UhiApiError as exc:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="write_failed",
-                translation_placeholders={"key": unit_id, "error": str(exc)},
-            ) from exc
+        result = await self._async_write(
+            unit_id, self.client.set_heating_unit_target(unit_id, value)
+        )
         self._apply_heating_unit_values(unit_id, {"target": value, **result})
         self.async_update_listeners()
 
     async def async_set_rapid_heating(self, unit_id: str, level: int) -> None:
-        try:
-            result = await self.client.set_rapid_heating(unit_id, level)
-        except UhiApiError as exc:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="write_failed",
-                translation_placeholders={"key": unit_id, "error": str(exc)},
-            ) from exc
+        result = await self._async_write(
+            unit_id, self.client.set_rapid_heating(unit_id, level)
+        )
         confirmed = result.get("level", level)
         self._apply_heating_unit_values(unit_id, {"rapidheating": {"level": confirmed}})
         self.async_update_listeners()
@@ -579,16 +574,9 @@ class DimplexUhiCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_put_mode(
         self, mode_id: int, is_automatic: bool, **extra: Any
     ) -> None:
-        try:
-            result = await self.client.set_operation_mode(
-                mode_id, is_automatic, **extra
-            )
-        except UhiApiError as exc:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="write_failed",
-                translation_placeholders={"key": MODE_KEY, "error": str(exc)},
-            ) from exc
+        result = await self._async_write(
+            MODE_KEY, self.client.set_operation_mode(mode_id, is_automatic, **extra)
+        )
         self.current_mode_id = mode_id
         self.is_automatic = is_automatic
         self._apply_mode_response(result)

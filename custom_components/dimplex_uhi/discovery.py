@@ -25,7 +25,7 @@ def setup_dynamic_entities(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Create entities for all currently/newly known keys of this platform."""
-    added: set[str] = set()
+    # The coordinator reports every key only once.
     keys_meta = device_keys()
 
     @callback
@@ -33,8 +33,7 @@ def setup_dynamic_entities(
         new_entities = []
         for key in keys:
             if (
-                key in added
-                or key in WRITABLE_SPECS
+                key in WRITABLE_SPECS
                 or key in COMMISSIONING_KEYS
                 or key in EXCLUDED_DISCOVERY_KEYS
             ):
@@ -43,7 +42,6 @@ def setup_dynamic_entities(
             definition = coordinator.definitions.get(key)
             if classify_platform(key, definition, meta) != platform:
                 continue
-            added.add(key)
             new_entities.append(factory(coordinator, key))
         if new_entities:
             async_add_entities(new_entities)

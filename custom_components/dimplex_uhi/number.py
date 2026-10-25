@@ -107,11 +107,7 @@ class DimplexUhiNumber(DimplexUhiEntity, RestoreNumber):
         unit = spec.unit or resolve_unit_for_key(
             self._key, self._definition, self._meta
         )
-        if unit == "°C":
-            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        elif unit == "K":
-            self._attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
-        elif unit:
+        if unit:
             self._attr_native_unit_of_measurement = unit
         if spec.device_class:
             self._attr_device_class = spec.device_class
@@ -162,9 +158,9 @@ class DimplexUhiNumber(DimplexUhiEntity, RestoreNumber):
         return self._optimistic
 
     async def async_set_native_value(self, value: float) -> None:
-        payload = int(value) if float(value).is_integer() else value
+        # encode_body sends integral floats as int (45.0 -> 45).
         confirmed = coerce_number(
-            await self.coordinator.async_set_function_data(self._key, payload)
+            await self.coordinator.async_set_function_data(self._key, value)
         )
         self._optimistic = confirmed
         self.coordinator.apply_local_value(self._key, confirmed)
@@ -229,8 +225,10 @@ class DimplexUhiHeatingUnitNumber(
         return self._unit.get("target")
 
     async def async_set_native_value(self, value: float) -> None:
-        payload = int(value) if float(value).is_integer() else value
-        await self.coordinator.async_set_heating_unit_target(self._unit_id, payload)
+        # The value is stored as shown: 3, not 3.0.
+        await self.coordinator.async_set_heating_unit_target(
+            self._unit_id, coerce_number(value)
+        )
 
 
 class DimplexUhiModeLimitNumber(CoordinatorEntity[DimplexUhiCoordinator], NumberEntity):
@@ -265,5 +263,4 @@ class DimplexUhiModeLimitNumber(CoordinatorEntity[DimplexUhiCoordinator], Number
         return self.coordinator.mode_limits.get(self._field)
 
     async def async_set_native_value(self, value: float) -> None:
-        payload = int(value) if float(value).is_integer() else value
-        await self.coordinator.async_set_mode_limit(self._field, payload)
+        await self.coordinator.async_set_mode_limit(self._field, coerce_number(value))

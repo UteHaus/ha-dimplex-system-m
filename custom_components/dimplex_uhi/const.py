@@ -22,7 +22,6 @@ CONF_VERSION_INTERVAL: Final = "version_interval"
 CONF_STATE_INTERVAL: Final = "state_interval"
 CONF_PARTY_HOURS: Final = "party_hours"
 
-DEFAULT_PORT: Final = 8080
 DEFAULT_LANGUAGE: Final = "de"
 SUPPORTED_LANGUAGES: Final = ("de", "en")
 
